@@ -28,7 +28,8 @@ app.add_middleware(
 )
 
 # Configuration: Project root directory
-PROJECT_ROOT = Path("./workspace").resolve()
+PROJECT_ROOT = Path(__file__).parent.parent / "workspace"
+PROJECT_ROOT = PROJECT_ROOT.resolve()
 PROJECT_ROOT.mkdir(exist_ok=True)
 
 # Optimization: Skip these directories entirely during scan
@@ -42,7 +43,7 @@ IGNORED_EXTENSIONS = {
 # --- Prompt Templates and Builders ---
 
 # Robustness: Use relative path based on backend file
-TEMPLATE_PATH = Path(__file__).parent / "templates" / "PromptTemplateV1.txt"
+TEMPLATE_PATH = Path(__file__).parent.parent / "templates" / "PromptTemplateV1.txt"
 
 def load_prompt_template() -> str:
     """Reads the prompt template from disk with robust error handling."""
@@ -116,7 +117,7 @@ def format_code_block(content: str, language: str) -> str:
     if len(lines) > 300:
         truncated_content += "\n... (truncated)"
         
-    return f"```{language}\n{truncated_content}\n```"
+    return truncated_content
 
 # --- End Builders ---
 
@@ -216,7 +217,7 @@ async def generate_prompt(request: PromptRequest):
         # 3. Clean and prepare file content (ONLY escape curly braces for raw content)
         safe_content = full_content.strip()
         if not safe_content:
-            safe_content = "// Empty file"
+            safe_content = "Empty file"
         
         escaped_content = safe_content.replace("{", "{{").replace("}", "}}")
         
