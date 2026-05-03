@@ -1,75 +1,239 @@
-import { useState, useEffect } from 'react'
-import ProjectExplorer from './components/ProjectExplorer'
-import CodeViewer from './components/CodeViewer'
-import ControlPanel from './components/ControlPanel'
+import React, { useState, useEffect, useRef } from 'react';
+import { PanelLeft, PanelRight, Layers, ChevronDown, ChevronUp, Replace } from 'lucide-react';
+import Explorer from './components/Explorer';
+import Editor from './components/Editor';
+import RightPanel from './components/RightPanel';
+import { buildTree, FileNode } from './utils/buildTree';
 
-function App() {
-  const [files, setFiles] = useState<string[]>([])
-  const [selectedFile, setSelectedFile] = useState<string | null>(null)
-  const [fileContent, setFileContent] = useState<string>('')
-  const [isLoading, setIsLoading] = useState(false)
+const API_BASE = 'http://localhost:5000';
 
-  const scanProject = async () => {
-    try {
-      const response = await fetch('/scan')
-      const data = await response.json()
-      setFiles(data.files || [])
-    } catch (error) {
-      console.error('Error scanning project:', error)
-    }
-  }
+export type Tab = {
+  path: string;
+  content: string;
+};
+
+const App: React.FC = () => {
+  const [tree, setTree] = useState<FileNode[]>([]);
+  const [tabs, setTabs] = useState<Tab[]>([]);
+  const [activeTabPath, setActiveTabPath] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // 🔥 FIX: useRef instead of state
+  const editorRef = useRef<any>(null);
+
+  const [showExplorer, setShowExplorer] = useState(true);
+  const [showRightPanel, setShowRightPanel] = useState(true);
 
   useEffect(() => {
-    scanProject()
-  }, [])
+    fetchProject();
+  }, []);
 
-  const handleFileSelect = async (file: string) => {
-    setSelectedFile(file)
-    setIsLoading(true)
+  const fetchProject = async () => {
     try {
-      // Assuming a simple way to get file content, maybe the backend has GET /file?path=...
-      // But the prompt doesn't specify how to GET file content. 
-      // I'll assume for now that if I click a file, I might need an endpoint or 
-      // maybe I'll mock it if not specified.
-      // Re-reading requirements: "Click a file → loads it in center panel"
-      // API Contract only shows GET /scan. I'll assume GET /file?path=... or similar
-      // is available or I'll just show a placeholder if I don't know the endpoint.
-      // Wait, let's look at the requirements again. 
-      // "API Contract (assume backend exists) ... GET /scan ... POST /prompt ... POST /apply ... POST /run"
-      // It doesn't mention GET /file. I'll assume GET /file?path=file exists for the sake of functionality.
-      
-      const response = await fetch(`/file?path=${encodeURIComponent(file)}`)
-      if (response.ok) {
-        const content = await response.text()
-        setFileContent(content)
-      } else {
-        setFileContent(`// Error loading ${file}\n// Make sure GET /file?path=... is implemented on backend.`)
-      }
-    } catch (error) {
-      setFileContent(`// Error: ${error}`)
+      setLoading(true);
+      const res = await fetch(`${API_BASE}/scan`);
+      if (!res.ok) throw new Error('Failed to scan project');
+      const data = await res.json();
+      setTree(buildTree(data.files));
+      setError(null);
+    } catch (err: any) {
+      setError(err.message);
     } finally {
-      setIsLoading(false)
+      setLoading(false);
     }
-  }
+  };
+
+  const handleFileSelect = async (path: string) => {
+    const existingTab = tabs.find(t => t.path === path);
+    if (existingTab) {
+      setActiveTabPath(path);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/file?path=${encodeURIComponent(path)}`);
+      if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
+      const text = await res.text();
+
+      const newTab = { path, content: text };
+      setTabs(prev => [...prev, newTab]);
+      setActiveTabPath(path);
+    } catch (err: any) {
+      console.error('[IDE] Error:', err);
+    }
+  };
+
+  const handleCloseTab = (e: React.MouseEvent, path: string) => {
+    e.stopPropagation();
+    const newTabs = tabs.filter(t => t.path !== path);
+    setTabs(newTabs);
+
+    if (activeTabPath === path) {
+      setActiveTabPath(newTabs.length ? newTabs[newTabs.length - 1].path : null);
+    }
+  };
+
+  const activeTab = tabs.find(t => t.path === activeTabPath) || null;
+
+  // ===== SEARCH ACTIONS =====
+  const triggerAction = (actionId: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    editor.focus();
+    editor.getAction(actionId)?.run();
+  };
 
   return (
-    <div className="app-container">
-      <ProjectExplorer 
-        files={files} 
-        selectedFile={selectedFile} 
-        onFileSelect={handleFileSelect}
-        onRefresh={scanProject}
-      />
-      <CodeViewer 
-        selectedFile={selectedFile} 
-        content={fileContent} 
-        isLoading={isLoading}
-      />
-      <ControlPanel 
-        selectedFile={selectedFile}
-      />
-    </div>
-  )
-}
+    <div className="flex h-full w-full overflow-hidden">
 
-export default App
+      {/* ===== LEFT PANEL ===== */}
+      {showExplorer && (
+        <div className="sidebar flex flex-col active-context">
+          <div className="sidebar-header">
+
+            {/* LEFT SPACER */}
+            <div className="header-spacer" />
+
+            {/* CENTER TITLE */}
+            <div className="explorer-title">
+              Explorer
+            </div>
+
+            {/* RIGHT BUTTON */}
+            <div
+              className="btn-icon"
+              onClick={() => setShowExplorer(false)}
+            >
+              <PanelLeft size={16} />
+            </div>
+
+          </div>
+
+          <div className="flex-1 overflow-hidden pt-2">
+            {loading ? (
+              <div className="p-16 text-[10px] opacity-50 italic">Scanning...</div>
+            ) : error ? (
+              <div className="p-16 text-[10px] text-red-400">Error: {error}</div>
+            ) : (
+              <Explorer
+                tree={tree}
+                selectedPath={activeTabPath}
+                onFileSelect={handleFileSelect}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===== MAIN AREA ===== */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+
+        {/* ===== HEADER ===== */}
+        <div className="app-header">
+
+          {/* LEFT */}
+          <div className="header-left">
+            {!showExplorer && (
+              <div className="btn-icon" onClick={() => setShowExplorer(true)}>
+                <PanelLeft size={16} />
+              </div>
+            )}
+
+            <div className="logo-icon">{">_"}</div>
+            <div className="logo-text">
+              NEXUS <span className="accent">IDE</span>
+            </div>
+          </div>
+
+          {/* CENTER SEARCH */}
+          <div className="header-search">
+            <input
+              className="search-input"
+              placeholder="Search in file..."
+              onFocus={() => triggerAction('actions.find')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  triggerAction('editor.action.nextMatchFindAction');
+                }
+              }}
+            />
+
+            <div className="search-actions">
+              <button
+                className="search-btn"
+                onClick={() => triggerAction('editor.action.previousMatchFindAction')}
+              >
+                <ChevronUp size={12} />
+              </button>
+
+              <button
+                className="search-btn"
+                onClick={() => triggerAction('editor.action.nextMatchFindAction')}
+              >
+                <ChevronDown size={12} />
+              </button>
+
+              <button
+                className="search-btn"
+                onClick={() => triggerAction('editor.action.startFindReplaceAction')}
+              >
+                <Replace size={12} />
+              </button>
+            </div>
+          </div>
+
+          {/* RIGHT */}
+          <div className="header-right">
+            {!showRightPanel && (
+              <div className="btn-icon" onClick={() => setShowRightPanel(true)}>
+                <PanelRight size={16} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ===== EDITOR ===== */}
+        <div className="flex-1 overflow-hidden">
+          <Editor
+            activeTab={activeTab}
+            tabs={tabs}
+            onSelectTab={setActiveTabPath}
+            onCloseTab={handleCloseTab}
+            onMount={(editor) => {
+              editorRef.current = editor;
+            }}
+          />
+        </div>
+      </div>
+
+      {/* ===== RIGHT PANEL ===== */}
+      {showRightPanel && (
+        <div className="right-panel flex flex-col">
+          <div className="sidebar-header">
+
+            {/* LEFT SPACER */}
+            <div className="header-spacer" />
+
+            {/* CENTER TITLE */}
+            <div className="explorer-title">
+              Intelligence
+            </div>
+
+            {/* RIGHT BUTTON */}
+            <div className="btn-icon" onClick={() => setShowRightPanel(false)}>
+              <PanelRight size={16} />
+            </div>
+
+          </div>
+
+          <RightPanel activeTab={activeTab} />
+        </div>
+      )}
+
+    </div>
+  );
+};
+
+export default App;
