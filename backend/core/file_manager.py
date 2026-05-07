@@ -1,5 +1,5 @@
 from fastapi import HTTPException
-from utils.security import is_safe_path, PROJECT_ROOT
+from utils.security import is_safe_path, get_project_root
 
 def get_file_content(path: str) -> str:
     """Returns the content of a file with robust reading and security checks."""
@@ -7,7 +7,7 @@ def get_file_content(path: str) -> str:
         raise HTTPException(status_code=400, detail="Invalid path: Path cannot be empty.")
 
     try:
-        resolved_path = is_safe_path(PROJECT_ROOT / path)
+        resolved_path = is_safe_path(get_project_root() / path)
         
         if not resolved_path.is_file():
             raise HTTPException(status_code=404, detail="File not found or is a directory.")

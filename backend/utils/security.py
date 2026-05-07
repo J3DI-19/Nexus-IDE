@@ -2,7 +2,17 @@ import os
 from pathlib import Path
 from fastapi import HTTPException
 
-PROJECT_ROOT = Path.cwd().resolve()
+_PROJECT_ROOT = Path.cwd().resolve()
+
+def get_project_root() -> Path:
+    return _PROJECT_ROOT
+
+def set_project_root(new_path: str):
+    global _PROJECT_ROOT
+    path = Path(new_path).resolve()
+    if not path.is_dir():
+        raise HTTPException(status_code=400, detail="Invalid directory path")
+    _PROJECT_ROOT = path
 
 def is_safe_path(path: Path) -> Path:
     """
@@ -11,7 +21,8 @@ def is_safe_path(path: Path) -> Path:
     """
     try:
         resolved_path = path.resolve()
-        if PROJECT_ROOT in resolved_path.parents or resolved_path == PROJECT_ROOT:
+        root = get_project_root()
+        if root in resolved_path.parents or resolved_path == root:
             return resolved_path
     except Exception:
         pass

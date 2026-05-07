@@ -1,17 +1,21 @@
 import os
+import hashlib
+from typing import List, Set
 
-# Optimization: Skip these directories entirely during scan
-IGNORED_DIRS = {"node_modules", ".git", "__pycache__", ".vscode", ".idea", "dist", "build"}
-# Optimization: Skip these common binary/large file types
+# Shared ignore lists
+IGNORED_DIRS = {
+    "node_modules", ".git", "__pycache__", ".vscode", ".idea", 
+    "dist", "build", ".nexus", "venv", ".env"
+}
 IGNORED_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip", ".tar", ".gz",
     ".exe", ".bin", ".pyc", ".o", ".obj", ".dll", ".so", ".dylib", ".woff", ".woff2", ".ttf"
 }
 
-def fast_recursive_scan(root_path: str):
+def fast_recursive_scan(root_path: str) -> List[str]:
     """
-    High-performance directory traversal using os.scandir.
-    Prunes ignored directories early to avoid unnecessary disk I/O.
+    High-performance directory traversal.
+    Returns sorted list of relative paths.
     """
     file_list = []
     
@@ -19,7 +23,7 @@ def fast_recursive_scan(root_path: str):
         try:
             with os.scandir(current_dir) as entries:
                 for entry in entries:
-                    if entry.name.startswith(".") or entry.name in IGNORED_DIRS:
+                    if entry.name.startswith(".") and entry.name != ".nexus" or entry.name in IGNORED_DIRS:
                         continue
                     
                     if entry.is_dir(follow_symlinks=False):
@@ -34,3 +38,14 @@ def fast_recursive_scan(root_path: str):
 
     _scan(root_path)
     return sorted(file_list)
+
+def compute_file_hash(file_path: str) -> str:
+    """Computes SHA-256 hash for incremental tracking."""
+    sha256_hash = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+    except Exception:
+        return ""

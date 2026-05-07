@@ -1,0 +1,26 @@
+/* src/styles/layout.css */
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.flex-1 { flex: 1 1 0%; }
+.flex-shrink-0 { flex-shrink: 0; }
+.min-h-0 { min-height: 0; }
+
+.h-full { height: 100%; }
+.w-full { width: 100%; }
+
+.items-center { align-items: center; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+
+.overflow-hidden { overflow: hidden; }
+
+/* SPACING SYSTEM */
+.p-6 { padding: 6px; }
+.p-12 { padding: 12px; }
+.p-20 { padding: 20px; }
+
+.gap-4 { gap: 4px; }
+.gap-8 { gap: 8px; }
+.gap-12 { gap: 12px; }
+.gap-20 { gap: 20px; }
+.gap-24 { gap: 24px; }

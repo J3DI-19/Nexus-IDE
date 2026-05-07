@@ -8,7 +8,6 @@ interface EditorProps {
   tabs: Tab[];
   onSelectTab: (path: string) => void;
   onCloseTab: (e: React.MouseEvent, path: string) => void;
-  onMount?: (editor: any) => void;
 }
 
 const getLanguage = (path: string | null) => {
@@ -33,8 +32,7 @@ const Editor: React.FC<EditorProps> = ({
   activeTab,
   tabs,
   onSelectTab,
-  onCloseTab,
-  onMount
+  onCloseTab
 }) => {
 
   // ===== WELCOME STATE =====
@@ -110,9 +108,6 @@ const Editor: React.FC<EditorProps> = ({
             path={activeTab.path}
             language={getLanguage(activeTab.path)}
             value={activeTab.content || ""} // 🔥 SAFETY FIX
-            onMount={(editor) => {
-              onMount?.(editor); // pass up safely
-            }}
             options={{
               readOnly: true,
               minimap: { enabled: true },

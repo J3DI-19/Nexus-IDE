@@ -36,7 +36,7 @@ const ExplorerNode: React.FC<{
         onClick={handleClick}
         className={`explorer-item ${isSelected ? 'selected' : ''}`}
         style={{
-          paddingLeft: `${level * 14 + 12}px`
+          paddingLeft: `${level * 12 + 10}px`
         }}
       >
         {/* arrow */}
@@ -85,7 +85,7 @@ const Explorer: React.FC<ExplorerProps> = ({
   onFileSelect
 }) => {
   return (
-    <div className="h-full overflow-y-auto pb-16">
+    <div style={{ height: '100%', overflowY: 'auto' }}>
       {tree.map((node) => (
         <ExplorerNode
           key={node.path}

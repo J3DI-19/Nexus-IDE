@@ -1,126 +1,443 @@
 # Nexus IDE
 
-Nexus IDE is a local-first AI-assisted development environment that enables controlled, transparent, and safe code modification using structured prompts and validated diff patches.
+Nexus IDE is a local-first deterministic engineering intelligence platform designed to bridge modern codebases with external LLMs through structured context engineering.
 
-It acts as a bridge between your codebase and AI tools—giving you full control over what changes are made and how they are applied.
+Unlike autonomous AI agents, Nexus focuses on:
 
----
+* deterministic retrieval
+* inspectable reasoning
+* runtime-aware context generation
+* structured engineering briefings
+* safe developer-controlled workflows
 
-## 🚀 Overview
-
-Nexus IDE runs directly inside your project.
-
-It provides a lightweight IDE-like interface combined with a safe AI workflow:
-
-* Scan and explore your project
-* Open and view files with syntax highlighting
-* Generate structured prompts for AI tools
-* Apply code changes safely via diff patches
-
-Everything runs locally — no external APIs required.
+Nexus does not attempt to replace developers.
+It acts as a high-signal context engine that prepares elite prompts and engineering context for external AI systems.
 
 ---
 
-## 🧩 Core Features
+# 🚀 Vision
 
-### 🗂 Project Explorer
+Nexus IDE aims to become a professional local-first engineering workspace where:
 
-* Automatically scans the current project directory
-* Displays a structured file tree (like VS Code)
-* Expand/collapse folders
-* Select files to open in editor
+* developers stay fully in control
+* AI assists instead of autonomously acting
+* context retrieval is explainable and inspectable
+* prompts are architecture-aware
+* execution workflows remain safe and reviewable
+* everything runs locally
 
----
+The long-term goal:
 
-### 📝 Code Editor (Monaco)
-
-* Powered by Monaco (VS Code engine)
-* Syntax highlighting based on file type
-* Multi-tab support
-* Read-only safe viewing mode
-* Built-in minimap and editor features
-
----
-
-### 🧠 AI Actions Panel
-
-* Dedicated right-side control panel
-* Generate structured prompts (UI ready)
-* Patch application flow (UI scaffold ready)
-* Active file context display
+```text
+Open Project
+→ Nexus understands architecture/runtime/context
+→ Nexus assembles engineering briefings
+→ External LLM produces high-quality output
+→ Nexus safely reviews/applies execution changes
+```
 
 ---
 
-### 🔍 In-Editor Search
+# 🧠 Core Philosophy
 
-* Search directly inside open file
-* Next / previous match navigation
-* Replace mode (via Monaco integration)
+Nexus is:
 
----
+* deterministic
+* local-first
+* modular
+* inspectable
+* developer-controlled
+* ecosystem-aware
 
-### 📄 Secure File Access
+Nexus is NOT:
 
-* Reads files directly from project
-* Prevents unsafe paths
-* Encodes paths safely for backend requests
-
----
-
-### 🧠 Structured Prompt Generation
-
-* Backend-driven prompt generation system
-* Uses external templates
-* Includes:
-
-  * File content
-  * Project structure
-  * Context-aware formatting
+* an autonomous AI agent
+* an opaque vector-database system
+* a cloud-dependent coding assistant
+* a black-box prompt generator
 
 ---
 
-### 🔒 Safe Patch Execution Engine
+# 🏗️ Major Architecture Evolution
 
-* Applies unified diff patches with:
+Nexus has evolved from:
 
-  * Dry-run validation
-  * Path safety checks
-  * Patch verification
-  * Timeout protection
-  * Git fallback
+```text
+Open file → Generate prompt
+```
 
----
+Into:
 
-### ⚡ Fast Project Scanning
-
-* Optimized using `os.scandir`
-* Skips unnecessary files and directories
-
----
-
-## 🏗️ Architecture
-
-### Backend (FastAPI)
-
-* `/scan` → Scan project files
-* `/file` → Retrieve file content
-* `/prompt` → Generate structured AI prompts
-* `/apply` → Apply validated diff patches
+```text
+Project Scan
+→ Metadata Indexing
+→ Symbol Graph Construction
+→ Runtime/Impact Intelligence
+→ Context Retrieval
+→ Structured Prompt Assembly
+```
 
 ---
 
-### Frontend (React + Vite)
+# ⚡ Current Capabilities
 
-* Explorer panel (file tree)
-* Editor panel (Monaco)
-* Right panel (AI + context)
-* Header (search + controls)
+## 🗂️ Workspace & Project Intelligence
+
+* Dynamic project root switching
+* High-speed recursive scanning
+* Incremental indexing via SHA-256 hashing
+* Framework detection
+* Runtime-aware project analysis
+* Workspace-wide symbol search
+* Multi-language project understanding
 
 ---
 
-## ⚙️ Setup
+## 🧠 Nexus Context Engine
 
-### Backend
+The backend now contains a fully modular Context Engine:
+
+```text
+backend/context_engine/
+```
+
+Core systems include:
+
+* indexing
+* traversal
+* retrieval
+* extraction
+* prompt assembly
+* runtime diagnostics
+* impact analysis
+* framework intelligence
+* language adapters
+
+---
+
+# 🔍 Deterministic Retrieval Engine
+
+Nexus retrieves context using deterministic scoring instead of embeddings.
+
+Retrieval signals include:
+
+* dependency traversal
+* call chains
+* inheritance relationships
+* runtime stack traces
+* framework artifacts
+* directory proximity
+* symbol similarity
+* execution paths
+* config relationships
+
+Every retrieved candidate includes:
+
+* score breakdowns
+* reasoning
+* relationship paths
+* framework/runtime relevance
+
+---
+
+# 🧩 Multi-Language Intelligence
+
+## Deep Language Support
+
+### Python
+
+* AST parsing
+* classes/functions
+* imports
+* inheritance
+* call chains
+* FastAPI route intelligence
+* runtime diagnostics
+
+### TypeScript / JavaScript
+
+* imports/exports
+* React components/hooks
+* symbol extraction
+* execution relationships
+* runtime-aware retrieval
+
+### Java
+
+* classes/interfaces
+* annotations
+* inheritance
+* method traversal
+* runtime mapping
+
+### Kotlin
+
+* data classes
+* coroutines
+* Compose detection
+* inheritance
+* runtime integration
+
+### C#
+
+* namespaces
+* async methods
+* delegates/events
+* inheritance
+* .NET runtime parsing
+
+### C++
+
+* namespaces
+* templates/macros
+* include relationships
+* header/source linking
+* compiler/runtime diagnostics
+
+---
+
+# 🏛️ Structural + Config Intelligence
+
+Nexus now deeply understands project structure.
+
+## Supported Structural Systems
+
+### HTML/CSS
+
+* DOM hierarchy
+* class/id extraction
+* style relationships
+* linked scripts/styles
+
+### XML
+
+* Android layouts
+* Manifest parsing
+* navigation relationships
+* resource IDs
+* Activity/Fragment linking
+
+### Config Systems
+
+* package.json
+* tsconfig
+* vite config
+* pyproject.toml
+* Gradle configs
+* docker-compose
+* YAML/TOML/JSON parsing
+
+---
+
+# ⚠️ Runtime + Execution Intelligence
+
+Nexus includes deterministic runtime diagnostics.
+
+Supported:
+
+* Python exceptions
+* Node.js stack traces
+* React/Vite runtime errors
+* TypeScript compiler errors
+* pytest failures
+* Gradle failures
+* Java/Kotlin stack traces
+* C# runtime traces
+* GCC/MSVC diagnostics
+
+Runtime intelligence integrates directly into:
+
+* retrieval scoring
+* extraction prioritization
+* impact analysis
+* prompt generation
+
+---
+
+# 🌐 Framework Intelligence
+
+## Current Framework Support
+
+### FastAPI
+
+* route extraction
+* decorator parsing
+* endpoint relationships
+* runtime route impact analysis
+
+### React
+
+* component detection
+* hook relationships
+* runtime-aware component traversal
+
+### Vite / Node.js
+
+* project classification
+* build/runtime awareness
+* dependency extraction
+
+---
+
+# 🔄 Impact Analysis Engine
+
+Nexus performs deterministic downstream dependency analysis.
+
+It can answer:
+
+* What breaks if this changes?
+* Which APIs depend on this symbol?
+* Which components are affected?
+* Which runtime paths are impacted?
+
+Impact traversal includes:
+
+* imports
+* calls
+* inheritance
+* framework artifacts
+* runtime execution paths
+* structural/config relationships
+
+---
+
+# ✂️ Smart Context Extraction
+
+Nexus does not dump entire files.
+
+Instead it performs:
+
+* symbol-boundary extraction
+* runtime-aware slicing
+* execution-aware extraction
+* XML/layout slicing
+* framework artifact extraction
+* dependency-focused context selection
+
+This drastically improves signal-to-noise ratio in prompts.
+
+---
+
+# 🧠 Structured Engineering Briefings
+
+Generated prompts now behave like:
+
+```text
+Senior engineer handoff documents
+```
+
+Prompt sections may include:
+
+* runtime diagnostics
+* execution chains
+* architectural dependencies
+* framework artifacts
+* impact warnings
+* selected context
+* code slices
+* retrieval reasoning
+
+Prompt modes include:
+
+* Feature Implementation
+* Bugfix / Debugging
+* Refactoring
+* Architecture Analysis
+
+---
+
+# 🖥️ Frontend Features
+
+## IDE Layout
+
+* Explorer sidebar
+* Monaco editor
+* Progressive right-side intelligence workflow
+* Workspace-wide search
+* Runtime diagnostics UI
+* Context review modals
+* Prompt preview modals
+
+---
+
+## Workspace Search
+
+The global search bar now acts as:
+
+```text
+Workspace / Symbol Search
+```
+
+Used for:
+
+* files
+* symbols
+* classes
+* functions
+* project-wide lookup
+
+Monaco search remains editor-local.
+
+---
+
+## Right Panel Workflow
+
+The Nexus Intelligence Panel now follows a progressive workflow:
+
+```text
+Initialize Index
+→ View Active Context
+→ Enter Goal
+→ Retrieve Context
+→ Review Runtime/Impact
+→ Assemble Engineering Briefing
+```
+
+Heavy sections open as overlays/modals to reduce clutter and maintain IDE-like focus.
+
+---
+
+# 🛡️ Safety Principles
+
+Nexus prioritizes:
+
+* transparent retrieval
+* explainable scoring
+* safe execution
+* reviewable modifications
+* deterministic behavior
+
+The system intentionally avoids:
+
+* autonomous AI agents
+* opaque embeddings/vector DBs
+* uncontrolled execution
+* hidden prompt manipulation
+
+---
+
+# ⚙️ Tech Stack
+
+## Backend
+
+* FastAPI
+* Python
+* Modular Context Engine
+* AST/heuristic parsers
+* Runtime analyzers
+
+## Frontend
+
+* React
+* TypeScript
+* Vite
+* Monaco Editor
+
+---
+
+# ⚙️ Setup
+
+## Backend
 
 ```bash
 cd backend
@@ -128,12 +445,15 @@ pip install fastapi uvicorn
 python main.py
 ```
 
-Server runs at:
-[http://localhost:5000](http://localhost:5000)
+Runs on:
+
+```text
+http://localhost:8000
+```
 
 ---
 
-### Frontend
+## Frontend
 
 ```bash
 cd frontend
@@ -141,137 +461,70 @@ npm install
 npm run dev
 ```
 
-App runs at:
-[http://localhost:5173](http://localhost:5173)
+Runs on:
+
+```text
+http://localhost:5173
+```
 
 ---
 
-## 🧪 Usage Workflow
+# 🧪 Current Development Focus
 
-1. Run Nexus IDE inside your project
-2. Open frontend UI
-3. Browse files in Explorer
-4. Open file in editor
-5. Generate prompt (next step)
-6. Send prompt to AI
-7. Paste diff patch
-8. Apply safely
+## Immediate Priorities
 
----
+### Stability & Prompt Quality
 
-## ⚠️ Requirements
+* retrieval tuning
+* extraction refinement
+* prompt compression
+* real-project testing
+* frontend stabilization
 
-* Python 3.8+
-* Node.js 18+
-* `patch` utility OR Git Bash / WSL (Windows)
+### Safe Execution Layer
 
----
+Planned workflow:
 
-## 🔐 Design Principles
+```text
+AI Response
+→ Patch Review
+→ Manual Approval
+→ Validation
+→ Safe Apply
+```
 
-* Local-first (no external APIs)
-* Safety over automation
-* Transparent modifications
-* Modular architecture
-* AI-assisted, not AI-controlled
+### Ecosystem Expansion
 
----
+Upcoming ecosystem intelligence:
 
-## 📌 Current Status
-
-### ✅ Completed
-
-#### Backend
-
-* Modular FastAPI backend
-* Fast project scanner
-* Secure file endpoint
-* Prompt generation system
-* External prompt templates
-* Safe diff patch engine
-* Path validation & protection
-* Dry-run patch validation
-* Git fallback support
-* Timeout handling
-
-#### Frontend (Major Progress)
-
-* Full 3-panel IDE layout
-* File explorer (tree-based)
-* Monaco editor integration
-* Multi-tab system
-* File loading from backend
-* In-editor search (Monaco-powered)
-* Right-side AI panel UI
-* Panel toggle system
-* Clean responsive layout
-* Consistent dark theme design
+* Android ecosystem intelligence
+* advanced web ecosystem intelligence
+* Unity ecosystem intelligence
+* Unreal/C++ ecosystem support
 
 ---
 
-### 🔄 In Progress
+# 📍 Current Status
 
-* Generate Prompt → backend connection
-* Patch input + apply workflow
-* Prompt display UI
-* Execution logs / output viewer
+Nexus IDE has evolved from:
 
----
+```text
+basic AI-assisted editor
+```
 
-### 🚀 Planned Features
+into:
 
-#### Code Intelligence
+```text
+a deterministic engineering intelligence platform
+```
 
-* Language-aware parsing (Python, JS/TS, Java, C++)
-* Function/class/import extraction
-* Cross-file linking
+The project is currently transitioning from:
 
-#### Editing & Navigation
+* architecture expansion
 
-* Global search (project-wide)
-* Symbol navigation
-* Clickable imports
+into:
 
-#### Execution Engine
-
-* Detect project type
-* Run builds/tests locally
-* Capture structured errors
-
-#### Patch System
-
-* Patch preview before apply
-* Undo / rollback
-* Multi-file patch viewer
-
-#### AI Workflow
-
-* Iterative loop system
-* Context-aware prompts
-* Smart prompt tuning
-
----
-
-## 🧭 Vision
-
-Nexus IDE aims to become a fully local AI-assisted development environment where:
-
-* Developers stay in control
-* AI assists, not replaces
-* Code changes are safe and reviewable
-* Everything remains private and local
-
----
-
-## 🛠️ Tech Stack
-
-* Backend: FastAPI (Python)
-* Frontend: React + Vite (TypeScript)
-* Editor: Monaco
-* Execution: Local tools (`patch`, `git`, subprocess)
-
----
-
-## 📍 Status
-
-Actively evolving from a backend engine into a full local AI-powered IDE.
+* refinement
+* stabilization
+* ecosystem specialization
+* execution workflows
