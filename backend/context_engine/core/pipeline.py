@@ -19,6 +19,7 @@ from ..prompt_builder.models import PromptMode
 from ..impact.analyzer import ImpactAnalyzer
 from ..impact.models import ImpactQuery, ImpactResult
 from ..runtime.analyzer import RuntimeAnalyzer
+from ..diagnostics.engine import DiagnosticsEngine
 
 class ContextPipeline:
     def __init__(self):
@@ -27,6 +28,7 @@ class ContextPipeline:
         self.retrieval = RetrievalEngine(self.index)
         self.impact = ImpactAnalyzer(self.index)
         self.runtime = RuntimeAnalyzer()
+        self.diagnostics = DiagnosticsEngine()
         self.extraction: Optional[ExtractionEngine] = None
         self.prompt_builder = AdvancedPromptBuilder()
         self.root_path: Optional[str] = None

@@ -34,15 +34,8 @@ const RuntimeDiagnostics: React.FC<RuntimeDiagnosticsProps> = ({ artifacts, exec
   }
 
   return (
-    <div className="space-y-6 max-h-[440px] overflow-y-auto pr-1 custom-scrollbar animate-in fade-in duration-400">
-      <div className="flex items-center justify-between px-2">
-        <div className="flex flex-col gap-0.5">
-          <div className="text-[10px] uppercase font-black text-red-400 tracking-[0.15em] flex items-center gap-2">
-            <AlertOctagon size={12} />
-            <span>Telemetry Diagnostics</span>
-          </div>
-          <div className="text-[8px] opacity-40 uppercase tracking-widest font-bold">Runtime Context Overlays</div>
-        </div>
+    <div className="space-y-4 pr-1 animate-in fade-in duration-400">
+      <div className="flex items-center justify-end px-2">
         <button 
           onClick={onClear}
           className="text-[9px] uppercase font-black text-red-300 hover:text-white transition-colors bg-red-500/10 border border-red-500/20 px-3 py-1 rounded-md"

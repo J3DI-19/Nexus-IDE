@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, CheckCircle2, Database, FileCode, Layers, RefreshCw, Sparkles, X } from 'lucide-react';
+import { Activity, CheckCircle2, Database, FileCode, Layers, RefreshCw, Sparkles, X, Zap } from 'lucide-react';
 import { Tab } from '../App';
 
 import TaskInput from './Intelligence/TaskInput';
@@ -120,18 +120,17 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded }) =
       return;
     }
 
-    setCandidates([]);
-    setImpactCandidates([]);
-    setSelectedPaths(new Set());
-    setFullFileOverrides(new Set());
-    setExpandedCand(null);
-    setPrompt('');
-    setRetrievalOpen(false);
-    setPromptOpen(false);
-    setError(null);
+    // Initial fetch
     fetchContextStatus();
     fetchRuntime();
-  }, [activeTab?.path, fetchContextStatus, fetchRuntime, isProjectLoaded, resetWorkflowState]);
+
+    // Background polling for runtime telemetry (VS Code-like reactive behavior)
+    const runtimeInterval = setInterval(() => {
+      fetchRuntime();
+    }, 5000);
+
+    return () => clearInterval(runtimeInterval);
+  }, [fetchContextStatus, fetchRuntime, isProjectLoaded, resetWorkflowState]);
 
   const initializeContext = async () => {
     if (!isProjectLoaded) return;
@@ -159,7 +158,27 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded }) =
       });
       if (res.ok) {
         const data = await res.json();
-        setImpactCandidates(data.candidates || []);
+        const rawCandidates = data.candidates || [];
+        
+        // Deduplicate and merge candidates by relative path
+        const map = new Map<string, any>();
+        rawCandidates.forEach((cand: any) => {
+          const path = cand.file_metadata.rel_path;
+          if (map.has(path)) {
+            const existing = map.get(path);
+            const allSymbols = new Set([...existing.affected_symbols, ...cand.affected_symbols]);
+            map.set(path, {
+              ...existing,
+              affected_symbols: Array.from(allSymbols),
+              traversal_depth: Math.min(existing.traversal_depth, cand.traversal_depth),
+              impact_score: Math.max(existing.impact_score, cand.impact_score)
+            });
+          } else {
+            map.set(path, { ...cand });
+          }
+        });
+        
+        setImpactCandidates(Array.from(map.values()).sort((a, b) => b.impact_score - a.impact_score));
       }
     } catch (err) {
       console.error('Impact analysis failed', err);
@@ -539,17 +558,32 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded }) =
         <div className="intel-modal-backdrop">
           <div className={`intel-modal ${mode === 'fix' ? 'mode-fix' : mode === 'refactor' ? 'mode-refactor' : ''}`}>
             <div className="intel-modal-header">
-              <div>
-                <div className="panel-title accent">
-                  <Layers size={13} />
-                  <span>Retrieved Context</span>
+              <div className="intel-modal-header-main">
+                <div className="intel-modal-title accent">
+                  {activeIntelView === 'runtime' ? <Activity size={16} strokeWidth={2.5} /> : 
+                   activeIntelView === 'impact' ? <Database size={16} strokeWidth={2.5} /> : 
+                   <Layers size={16} strokeWidth={2.5} />}
+                  <span>
+                    {activeIntelView === 'runtime' ? 'Telemetry Diagnostics' : 
+                     activeIntelView === 'impact' ? 'Downstream Impact Radius' : 
+                     'Surgical Engineering Intelligence'}
+                  </span>
                 </div>
                 <div className="intel-modal-subtitle">
-                  Ranked context for {activeTab?.path.split('/').pop()}
+                  <span className="intel-header-file-pill">
+                    <FileCode size={10} className="opacity-50" />
+                    {activeTab?.path.split('/').pop()}
+                  </span>
+                  <div className="intel-subtitle-divider"></div>
+                  <span className="intel-stat-highlight">
+                    {activeIntelView === 'runtime' ? `${runtimeArtifacts.length} Artifacts` : 
+                     activeIntelView === 'impact' ? `${impactCandidates.length} Impacted Files` : 
+                     `${candidates.length} Files Ranked`}
+                  </span>
                 </div>
               </div>
               <button className="intel-modal-close" onClick={() => setRetrievalOpen(false)} type="button">
-                <X size={14} />
+                <X size={16} />
               </button>
             </div>
 
@@ -590,6 +624,17 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded }) =
                 loading={loading}
                 mode={mode}
               />
+            </div>
+
+            <div className="intel-modal-footer">
+              <button
+                className="btn btn-primary w-full flex items-center justify-center gap-2"
+                onClick={handleAssemble}
+                disabled={loading || selectedPaths.size === 0}
+              >
+                <Zap size={14} />
+                Assemble Prompt
+              </button>
             </div>
           </div>
         </div>

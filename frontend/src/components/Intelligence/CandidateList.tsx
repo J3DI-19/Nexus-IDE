@@ -146,22 +146,24 @@ const SliceCard: React.FC<{
   );
 };
 
-const ConnectionChain: React.FC<{ path: string[] }> = ({ path }) => {
+export const ConnectionChain: React.FC<{ path: string[] }> = ({ path }) => {
   if (!path || path.length === 0) return null;
   
   return (
-    <div className="connection-chain">
-      <span className="text-[8px] uppercase tracking-[0.12em] opacity-20 mr-1">
-  Flow
-</span>
-      {path.map((node, i) => (
-        <React.Fragment key={i}>
-          <span className={`chain-node ${i === path.length - 1 ? 'active' : ''}`}>
-            {node.includes(':') ? node.split(':').pop() : node.split('/').pop()}
-          </span>
-          {i < path.length - 1 && <ChevronRight size={8} className="opacity-20" />}
-        </React.Fragment>
-      ))}
+    <div className="connection-chain ml-4">
+      <div className="connection-flow-box">
+        <span className="text-[8px] uppercase tracking-[0.12em] opacity-30 mr-1.5">
+          Flow
+        </span>
+        {path.map((node, i) => (
+          <React.Fragment key={i}>
+            <span className={`chain-node ${i === path.length - 1 ? 'active' : ''}`}>
+              {node.includes(':') ? node.split(':').pop() : node.split('/').pop()}
+            </span>
+            {i < path.length - 1 && <ChevronRight size={8} className="opacity-20" />}
+          </React.Fragment>
+        ))}
+      </div>
     </div>
   );
 };
@@ -178,19 +180,10 @@ const CandidateList: React.FC<CandidateListProps> = ({
   selectAllSlices,
   expandedCand,
   setExpandedCand,
-  onAssemble,
   loading
 }) => {
   return (
-    <div className="panel-section border-t border-white/5 pt-4">
-      <div className="panel-title mb-4">
-        <ShieldCheck size={13} />
-        <span>Surgical Engineering Intelligence</span>
-        <span className="ml-auto text-[10px] opacity-40 font-mono">
-          {candidates.length} Files Ranked
-        </span>
-      </div>
-
+    <div className="candidate-list-root">
       <div className="candidate-list custom-scrollbar space-y-3">
         {candidates.map((cand) => {
           const path = cand.file_metadata.rel_path;
@@ -221,27 +214,36 @@ const CandidateList: React.FC<CandidateListProps> = ({
                 </button>
                 
                 <div className="file-bubble-meta">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="candidate-name">{path.split('/').pop()}</span>
-                    <span className="candidate-badge accent opacity-60">{cand.file_metadata.classification}</span>
-                    {isFileSelected && (
-                      <span className={`text-[8px] px-1.5 rounded-full font-bold tracking-tight ${isFullFile ? 'bg-purple-500/20 text-purple-300' : isEmpty ? 'bg-red-500/10 text-red-400' : 'bg-blue-500/10 text-blue-400'}`}>
-                        {isFullFile ? 'FULL OVERRIDE' : `${activeSlicesCount} SLICE${activeSlicesCount !== 1 ? 'S' : ''}`}
+                  {/* Primary Row: Identity (Left) and Score (Right) */}
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className="candidate-name">{path.split('/').pop()}</span>
+                      <span className="candidate-badge accent">{cand.file_metadata.classification}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 min-w-[50px] justify-end">
+                      <span className="candidate-score-badge">
+                        {Math.round(cand.score)}%
                       </span>
-                    )}
-                    <div className="ml-auto flex items-center gap-1.5">
-                      <span className="text-[9px] font-mono opacity-30">{Math.round(cand.score)}%</span>
-                      <div className="w-1.5 h-1.5 rounded-full" style={{ background: `hsla(${cand.score * 1.2}, 70%, 50%, 0.4)` }}></div>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="candidate-path truncate opacity-40 text-[9px] max-w-[140px]">{path}</div>
-                    {cand.relationship_path?.length > 1 && <div className="h-2 w-[1px] bg-white/10"></div>}
-                    <ConnectionChain path={cand.relationship_path} />
+                  {/* Secondary Row: Context (Left) and Status (Right) */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4 truncate pr-4">
+                      <div className="candidate-path">{path}</div>
+                      {cand.relationship_path?.length > 1 && (
+                        <ConnectionChain path={cand.relationship_path} />
+                      )}
+                    </div>
+                    
+                    {isFileSelected && (
+                      <div className="shrink-0 flex justify-end">
+                        <span className={`candidate-selection-badge ${isFullFile ? 'purple' : isEmpty ? 'red' : 'blue'}`}>
+                          {isFullFile ? 'FULL OVERRIDE' : `${activeSlicesCount} SLICE${activeSlicesCount !== 1 ? 'S' : ''}`}
+                        </span>
+                      </div>
+                    )}
                   </div>
-                  
-                  <ExplainabilityHierarchy breakdown={cand.score_breakdown} />
                 </div>
 
                 <div className="candidate-expand opacity-40 ml-2">
@@ -251,19 +253,24 @@ const CandidateList: React.FC<CandidateListProps> = ({
 
               {isExpanded && (
                 <div className="file-bubble-details animate-in slide-in-from-top-1 duration-200 pb-2">
-                  <div className="px-3 flex items-center justify-end mb-2 gap-2">
-                    <button 
-                      className={`full-file-toggle ${activeSlicesCount === cand.slices?.length ? 'active' : ''}`}
-                      onClick={(e) => { e.stopPropagation(); selectAllSlices(path); }}
-                    >
-                      Include All Fragments
-                    </button>
-                    <button 
-                      className={`full-file-toggle ${isFullFile ? 'active' : ''}`}
-                      onClick={(e) => { e.stopPropagation(); toggleFullFile(path); }}
-                    >
-                      {isFullFile ? 'Full File Enabled' : 'Include Full File'}
-                    </button>
+                  <div className="px-3 flex items-center justify-between mb-2 gap-2">
+                    <div className="flex-1">
+                      <ExplainabilityHierarchy breakdown={cand.score_breakdown} />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        className={`full-file-toggle ${activeSlicesCount === cand.slices?.length ? 'active' : ''}`}
+                        onClick={(e) => { e.stopPropagation(); selectAllSlices(path); }}
+                      >
+                        Include All Fragments
+                      </button>
+                      <button 
+                        className={`full-file-toggle ${isFullFile ? 'active' : ''}`}
+                        onClick={(e) => { e.stopPropagation(); toggleFullFile(path); }}
+                      >
+                        {isFullFile ? 'Full File Enabled' : 'Include Full File'}
+                      </button>
+                    </div>
                   </div>
                   
                   {isEmpty && (
@@ -303,15 +310,6 @@ const CandidateList: React.FC<CandidateListProps> = ({
           );
         })}
       </div>
-
-      <button
-        className="btn btn-primary w-full mt-4 flex items-center justify-center gap-2"
-        onClick={onAssemble}
-        disabled={loading || selectedPaths.size === 0}
-      >
-        <Zap size={14} />
-        Assemble Prompt
-      </button>
     </div>
   );
 };

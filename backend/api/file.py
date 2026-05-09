@@ -29,11 +29,25 @@ async def read_file(path: str = Query(..., description="Relative path to file"))
     content = get_file_content(path)
     return PlainTextResponse(content)
 
+from context_engine.core.pipeline import pipeline
+
 @router.post("/file/save")
 async def save_file(req: SaveFileRequest):
     """Saves content to a file."""
     save_file_content(req.path, req.content)
-    return {"status": "success", "message": "File saved."}
+    
+    # 2. Trigger Background Diagnostics (Linter-like behavior)
+    try:
+        diagnostics = pipeline.diagnostics.run_diagnostics(req.path, req.content)
+        for artifact in diagnostics:
+            # Feed syntax errors into the runtime sink so the UI updates immediately
+            pipeline.runtime._current_artifacts.insert(0, artifact)
+            # Cap the buffer
+            pipeline.runtime._current_artifacts = pipeline.runtime._current_artifacts[:10]
+    except Exception as e:
+        print(f"[Diagnostics] Failed for {req.path}: {e}")
+
+    return {"status": "success", "message": "File saved and diagnostics completed."}
 
 @router.post("/file/create")
 async def create_file(req: CreatePathRequest):

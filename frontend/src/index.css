@@ -6,4 +6,6 @@
 @import './styles/header.css';
 @import './styles/sidebar.css';
 @import './styles/editor.css';
-@import './styles/intelligence.css';
+@import './styles/IntelligenceShared.css';
+@import './styles/RightPanel.css';
+@import './styles/IntelligenceModal.css';
