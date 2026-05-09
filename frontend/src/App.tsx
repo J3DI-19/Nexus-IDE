@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Braces, FileText, Folder, PanelLeft, PanelRight, Search, X } from 'lucide-react';
+import { Braces, FileText, Folder, PanelLeft, PanelRight, Search, Settings, X } from 'lucide-react';
 import Explorer from './components/Explorer';
 import Editor from './components/Editor';
 import RightPanel from './components/RightPanel';
@@ -229,7 +229,7 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTabPath, tabs]); // Use activeTabPath for more stable dependency
+  }, [activeTabPath, tabs]);
 
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -770,7 +770,11 @@ const App: React.FC = () => {
 
           </div>
 
-          <RightPanel activeTab={activeTab} isProjectLoaded={isProjectLoaded} />
+          <RightPanel 
+            activeTab={activeTab} 
+            isProjectLoaded={isProjectLoaded} 
+            onFileSelect={handleFileSelect}
+          />
         </div>
       )}
 

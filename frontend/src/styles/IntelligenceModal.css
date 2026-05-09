@@ -474,6 +474,95 @@
   color: #fff;
 }
 
+.file-bubble.status-error {
+  border-color: rgba(255, 75, 75, 0.15);
+  background: linear-gradient(180deg, rgba(255, 75, 75, 0.03) 0%, transparent 100%);
+  margin-bottom: 12px; /* Added spacing between bubbles */
+  cursor: pointer; /* Signal interactivity */
+  user-select: none; /* Prevent text selection on double-click */
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.file-bubble.status-error:hover {
+  border-color: rgba(255, 75, 75, 0.4);
+  background: rgba(255, 75, 75, 0.06);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 75, 75, 0.1);
+}
+
+.runtime-hotspot-card {
+  background: rgba(255, 75, 75, 0.04);
+  border: 1px solid rgba(255, 75, 75, 0.15);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.hotspot-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.hotspot-pill.leaf {
+  background: rgba(255, 75, 75, 0.12);
+  border: 1px solid rgba(255, 75, 75, 0.25);
+  color: #ff8e8e;
+}
+
+.hotspot-pill.branch {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.trace-path-container {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.trace-path-header {
+  background: rgba(255, 255, 255, 0.03);
+  padding: 4px 10px;
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.3);
+  letter-spacing: 0.1em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.trace-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.trace-step b {
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: 700;
+}
+
+.trace-step i {
+  color: #ff8e8e;
+  font-style: normal;
+  font-weight: 800;
+}
+
 /* --- Surgical Slices (Professional Code View) --- */
 .slice-card {
   background: #080808;

@@ -18,9 +18,10 @@ interface ImpactCandidate {
 interface ImpactAnalysisProps {
   impactCandidates: ImpactCandidate[];
   loading: boolean;
+  onJumpToFile?: (path: string, line?: number) => void;
 }
 
-const ImpactAnalysis: React.FC<ImpactAnalysisProps> = ({ impactCandidates, loading }) => {
+const ImpactAnalysis: React.FC<ImpactAnalysisProps> = ({ impactCandidates, loading, onJumpToFile }) => {
   if (loading) {
     return (
       <div className="py-16 flex flex-col items-center justify-center gap-4 bg-yellow-400/[0.02] border border-dashed border-yellow-400/20 rounded-xl animate-pulse">
@@ -48,15 +49,37 @@ const ImpactAnalysis: React.FC<ImpactAnalysisProps> = ({ impactCandidates, loadi
   }
 
   return (
-    <div className="space-y-4 pr-1 animate-in fade-in duration-400">
-      <div className="space-y-3">
+    <div className="flex flex-col gap-4 pr-1 animate-in fade-in duration-400">
+      <div className="flex flex-col gap-3">
         {impactCandidates.map((cand, idx) => {
           const relPath = cand.file_metadata.rel_path;
           const fileName = relPath.split('/').pop();
 
+          const handleDoubleClick = (e: React.MouseEvent) => {
+            if (onJumpToFile) {
+              const path = relPath;
+              // Default back to line 1 as part of the stability rollback
+              const line = 1;
+
+              onJumpToFile(path);
+
+              setTimeout(() => {
+                const event = new CustomEvent('nexus-editor-jump', { 
+                  detail: { path, line } 
+                });
+                window.dispatchEvent(event);
+              }, 50);
+            }
+          };
+
           return (
-            <div key={idx} className="file-bubble status-impact">
-              <div className="file-bubble-header cursor-default">
+            <div 
+              key={idx} 
+              className="file-bubble status-impact interactive-diagnostic"
+              onDoubleClick={handleDoubleClick}
+              title="Double-click to navigate to file"
+            >
+              <div className="file-bubble-header cursor-pointer">
                 {/* Visual Icon */}
                 <div className="candidate-toggle selected pointer-events-none" style={{ borderColor: 'rgba(255, 202, 58, 0.3)', background: 'rgba(255, 202, 58, 0.1)', color: 'var(--color-dependency)' }}>
                   <FileCode size={14} />

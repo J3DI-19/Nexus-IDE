@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import MonacoEditor from '@monaco-editor/react';
 import { X, FileCode } from 'lucide-react';
 import { Tab } from '../App';
@@ -37,27 +37,51 @@ const Editor: React.FC<EditorProps> = ({
   onContentChange
 }) => {
 
+  const editorRef = useRef<any>(null);
+
+  // Simple Global Jump Listener (Decoupled from React state complexity)
+  React.useEffect(() => {
+    const handleJump = (e: any) => {
+      const { path, line } = e.detail;
+      if (!editorRef.current || !activeTab || activeTab.path !== path) return;
+
+      console.log('[IDE] Global Jump Received for:', path, 'Line:', line);
+      
+      const editor = editorRef.current;
+      
+      // Delay jump slightly to ensure Monaco has finished re-rendering if the tab just changed
+      setTimeout(() => {
+        editor.revealLineInCenter(line);
+        editor.setPosition({ lineNumber: line, column: 1 });
+        editor.focus();
+        
+        // Force "typing mode" by simulating a small cursor movement or just ensuring focus is deep
+        const domNode = editor.getDomNode();
+        if (domNode) {
+          const textarea = domNode.querySelector('textarea');
+          if (textarea) textarea.focus();
+        }
+      }, 100);
+    };
+
+    window.addEventListener('nexus-editor-jump', handleJump);
+    return () => window.removeEventListener('nexus-editor-jump', handleJump);
+  }, [activeTab]);
+
+  const handleEditorDidMount = (editor: any) => {
+    editorRef.current = editor;
+  };
+
   // ===== WELCOME STATE =====
   if (!activeTab && tabs.length === 0) {
     return (
       <div className="editor-root">
         <div className="welcome-container">
           <div className="welcome-inner">
-
             <div className="welcome-icon">{">_"}</div>
-
-            <h1 className="welcome-title">
-              NEXUS <span className="accent">IDE</span>
-            </h1>
-
-            <p className="welcome-subtitle">
-              Local AI-powered development environment
-            </p>
-
-            <p className="welcome-hint">
-              Select a file from the explorer to begin
-            </p>
-
+            <h1 className="welcome-title">NEXUS <span className="accent">IDE</span></h1>
+            <p className="welcome-subtitle">Local AI-powered development environment</p>
+            <p className="welcome-hint">Select a file from the explorer to begin</p>
           </div>
         </div>
       </div>
@@ -69,12 +93,9 @@ const Editor: React.FC<EditorProps> = ({
 
   return (
     <div className="editor-root">
-
-      {/* TAB BAR */}
       <div className="tab-bar">
         {safeTabs.map((tab) => {
           const isActive = activeTab?.path === tab.path;
-
           return (
             <div
               key={tab.path}
@@ -82,16 +103,14 @@ const Editor: React.FC<EditorProps> = ({
               className={`tab ${isActive ? 'active' : ''} ${tab.isDirty ? 'dirty' : ''}`}
             >
               <FileCode size={14} className="opacity-70" />
-
               <span className="tab-title truncate">
                 {tab.path.split('/').pop()}
                 {tab.isDirty && <span className="tab-dirty-indicator">●</span>}
               </span>
-
               <div
                 className="tab-close"
                 onClick={(e) => {
-                  e.stopPropagation(); // 🔥 IMPORTANT FIX
+                  e.stopPropagation();
                   onCloseTab(e, tab.path);
                 }}
               >
@@ -102,17 +121,17 @@ const Editor: React.FC<EditorProps> = ({
         })}
       </div>
 
-      {/* MONACO */}
       <div className="editor-container">
         {activeTab && (
           <MonacoEditor
-            key={activeTab.path} // 🔥 FORCE CLEAN RE-MOUNT (fixes black screen)
+            key={activeTab.path} 
             height="100%"
             width="100%"
             theme="vs-dark"
             path={activeTab.path}
             language={getLanguage(activeTab.path)}
-            value={activeTab.content || ""} // 🔥 SAFETY FIX
+            value={activeTab.content || ""} 
+            onMount={handleEditorDidMount}
             onChange={(val) => {
               if (val !== undefined && onContentChange) {
                 onContentChange(activeTab.path, val);
@@ -134,7 +153,6 @@ const Editor: React.FC<EditorProps> = ({
           />
         )}
       </div>
-
     </div>
   );
 };

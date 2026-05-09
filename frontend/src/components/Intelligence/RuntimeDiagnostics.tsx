@@ -1,5 +1,6 @@
 import React from 'react';
-import { Zap, AlertOctagon, ChevronRight } from 'lucide-react';
+import { Zap, AlertOctagon, ChevronRight, FileCode } from 'lucide-react';
+import { ConnectionChain } from './CandidateList';
 
 interface StackTraceFrame {
   file_path: string;
@@ -19,9 +20,10 @@ interface RuntimeDiagnosticsProps {
   executionChains?: string[][];
   hotSymbols?: { name: string; file: string; hits: number; is_leaf: boolean }[];
   onClear: () => void;
+  onJumpToFile?: (path: string, line: number) => void;
 }
 
-const RuntimeDiagnostics: React.FC<RuntimeDiagnosticsProps> = ({ artifacts, executionChains, hotSymbols, onClear }) => {
+const RuntimeDiagnostics: React.FC<RuntimeDiagnosticsProps> = ({ artifacts, executionChains, hotSymbols, onClear, onJumpToFile }) => {
   if (!artifacts || artifacts.length === 0) {
     return (
       <div className="py-12 flex flex-col items-center justify-center opacity-30 gap-3 border border-dashed border-white/5 rounded-xl bg-white/[0.01]">
@@ -34,8 +36,8 @@ const RuntimeDiagnostics: React.FC<RuntimeDiagnosticsProps> = ({ artifacts, exec
   }
 
   return (
-    <div className="space-y-4 pr-1 animate-in fade-in duration-400">
-      <div className="flex items-center justify-end px-2">
+    <div className="flex flex-col gap-5 pr-1 animate-in fade-in duration-400">
+      <div className="flex items-center justify-end">
         <button 
           onClick={onClear}
           className="text-[9px] uppercase font-black text-red-300 hover:text-white transition-colors bg-red-500/10 border border-red-500/20 px-3 py-1 rounded-md"
@@ -45,65 +47,103 @@ const RuntimeDiagnostics: React.FC<RuntimeDiagnosticsProps> = ({ artifacts, exec
       </div>
 
       {hotSymbols && hotSymbols.length > 0 && (
-        <div className="bg-red-500/[0.04] border border-red-500/15 rounded-xl p-3 shadow-lg shadow-red-900/10">
+        <div className="runtime-hotspot-card">
           <div className="text-[9px] font-black text-red-200 uppercase mb-3 flex items-center gap-2 tracking-widest">
-            <Zap size={12} className="text-red-400 drop-shadow-[0_0_5px_rgba(255,70,70,0.5)]" />
+            <Zap size={12} className="text-red-400" />
             <span>Failing Architectural Hotspots</span>
           </div>
-          <div className="flex flex-wrap gap-2.5">
+          <div className="flex flex-wrap gap-2">
             {hotSymbols.map((sym, i) => (
-              <div key={i} className={`text-[10px] px-2.5 py-1.5 rounded-lg border flex items-center gap-3 transition-all ${sym.is_leaf ? 'bg-red-500/15 border-red-500/40 text-red-50 shadow-inner' : 'bg-white/5 border-white/10 text-white/50'}`}>
-                <span className="font-mono font-bold">{sym.name}()</span>
-                <span className="h-3 w-px bg-white/10"></span>
-                <span className="opacity-60 text-[9px] font-mono">{sym.hits} Hits</span>
+              <div key={i} className={`hotspot-pill ${sym.is_leaf ? 'leaf' : 'branch'}`}>
+                <span className="font-mono">{sym.name}()</span>
+                <span className="opacity-40 text-[9px]">{sym.hits} Hits</span>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      <div className="space-y-3">
-        {artifacts.map((art, idx) => (
-          <div key={idx} className="file-bubble p-3 border-red-500/20 bg-red-500/[0.02]">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse"></div>
-                <span className="text-[10px] font-black text-red-300 uppercase tracking-wider">
-                  {art.artifact_type.replace('_', ' ')}
-                </span>
-              </div>
-              {art.metadata?.lang && (
-                <span className="text-[8px] px-2 py-0.5 rounded-md bg-red-500/20 text-red-200 border border-red-500/30 uppercase font-black">
-                  {art.metadata.lang}
-                </span>
-              )}
-            </div>
-            <div className="text-[11px] text-red-50/80 font-mono mb-3 break-words leading-relaxed border-l-[3px] border-red-500/40 pl-3 py-0.5">
-              {art.message}
-            </div>
+      <div className="flex flex-col gap-4">
+        {artifacts.map((art, idx) => {
+          const primaryFrame = art.frames && art.frames.length > 0 ? art.frames[0] : null;
 
-            {art.frames && art.frames.length > 0 && (
-              <div className="mt-3 bg-black/40 rounded-lg border border-white/5 overflow-hidden">
-                <div className="px-2 py-1 bg-white/5 text-[8px] uppercase font-bold opacity-30 tracking-widest border-bottom border-white/5">Trace Execution Path</div>
-                <div className="p-2 space-y-1.5">
-                  {art.frames.slice(0, 3).map((frame, i) => (
-                    <div key={i} className="text-[10px] font-mono text-red-100/60 flex items-center gap-2.5">
-                      <div className="text-red-500/30 font-bold">{i + 1}</div>
-                      <span className="text-red-100/80 font-bold">{frame.file_path.split(/[\\/]/).pop()}</span>
-                      <span className="opacity-30">:{frame.line_number}</span>
-                      {frame.symbol_name && (
-                        <>
-                          <ChevronRight size={10} className="opacity-20" />
-                          <span className="text-red-400/50 font-black italic"> {frame.symbol_name}()</span>
-                        </>
-                      )}
+          const handleDoubleClick = (e: React.MouseEvent) => {
+            if (primaryFrame && onJumpToFile) {
+              // 1. Normalize Path for the jump
+              let path = primaryFrame.file_path.replace(/\\/g, '/');
+              ['/workspace/', 'workspace/', './'].forEach(delim => {
+                if (path.includes(delim)) path = path.split(delim).pop() || path;
+              });
+              if (path.startsWith('/')) path = path.substring(1);
+
+              // 2. Trigger the "File Select" logic normally (opens tab)
+              onJumpToFile(path);
+
+              // 3. Broadcast Global Event for the Editor to handle the jump/focus
+              // We do this after a small delay to ensure the tab has started changing
+              setTimeout(() => {
+                const event = new CustomEvent('nexus-editor-jump', { 
+                  detail: { path, line: primaryFrame.line_number } 
+                });
+                window.dispatchEvent(event);
+              }, 50);
+            }
+          };
+
+          return (
+            <div 
+              key={idx} 
+              className="file-bubble status-error interactive-diagnostic"
+              onDoubleClick={handleDoubleClick}
+              title="Double-click to navigate to source"
+            >
+              <div className="file-bubble-header cursor-pointer">
+                <div className="candidate-toggle selected pointer-events-none" style={{ borderColor: 'rgba(255, 75, 75, 0.3)', background: 'rgba(255, 75, 75, 0.1)', color: 'var(--color-runtime)' }}>
+                  <AlertOctagon size={14} />
+                </div>
+
+                <div className="file-bubble-meta">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className="candidate-name">{art.artifact_type.replace('_', ' ')}</span>
+                      {art.metadata?.lang && <span className="candidate-badge accent">{art.metadata.lang}</span>}
                     </div>
-                  ))}
+                    <div className="candidate-score-badge" style={{ color: '#ff8e8e', background: 'rgba(255, 75, 75, 0.1)', borderColor: 'rgba(255, 75, 75, 0.2)' }}>
+                      CRITICAL
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="candidate-path truncate max-w-[400px]" title={art.message}>{art.message}</div>
+                  </div>
                 </div>
               </div>
-            )}
-          </div>
-        ))}
+
+              {art.frames && art.frames.length > 0 && (
+                <div className="px-3 pb-3 border-t border-white/5 mt-1">
+                  <div className="trace-path-container">
+                    <div className="trace-path-header">Execution Trace</div>
+                    {art.frames.slice(0, 4).map((frame, i) => (
+                      <div key={i} className="trace-step border-b border-white/[0.03] last:border-0">
+                        <span className="opacity-20 font-black">{i + 1}</span>
+                        <div className="truncate">
+                          <b>{frame.file_path.split(/[\\/]/).pop()}</b>
+                          <span className="opacity-30 mx-1">:</span>
+                          <span className="opacity-50">{frame.line_number}</span>
+                        </div>
+                        {frame.symbol_name && (
+                          <div className="ml-auto">
+                            <i>{frame.symbol_name}()</i>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
