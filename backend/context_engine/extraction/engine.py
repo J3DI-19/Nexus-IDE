@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import List, Optional, Set
 from .models import ExtractedFile, ExtractionContext, CodeSlice
 from .slicers import CodeSlicer
@@ -13,38 +14,47 @@ class ExtractionEngine:
         self.slicer = CodeSlicer(root_path)
         self.traversal = GraphTraversalEngine(index)
 
-    def extract_context(self, active_file: Optional[str], candidates: List[ContextCandidate], runtime: Optional[RuntimeAnalyzer] = None) -> ExtractionContext:
+    def extract_context(self, active_file: Optional[str], candidates: List[ContextCandidate], mode: str = "feature", runtime: Optional[RuntimeAnalyzer] = None, full_file_overrides: Optional[List[str]] = None) -> ExtractionContext:
         """
         Orchestrates extraction for the active file and retrieved candidates.
+        Uses semantic slicing by default.
         """
         context = ExtractionContext()
+        overrides = set(full_file_overrides or [])
 
-        # 1. Process Active File (High priority, usually full extraction or key symbols)
+        # 1. Process Active File
         if active_file:
-            context.active_file = self._extract_single_file(active_file, "Active File", full=True, runtime=runtime)
+            is_override = active_file in overrides
+            context.active_file = self._extract_single_file(
+                active_file, 
+                "Active File", 
+                mode=mode, 
+                max_full_lines=2000 if is_override else 300, 
+                runtime=runtime,
+                is_full_override=is_override
+            )
 
         # 2. Process Candidates
         for cand in candidates:
-            # We don't want to re-extract the active file if it was also a candidate
             if active_file and cand.file_metadata.rel_path == active_file:
                 continue
             
-            # Logic: If high score, extract more. If low score, just symbols.
-            # Deterministic threshold for "Deep Extraction"
-            deep_extract = cand.score >= 40.0
-            
+            is_override = cand.file_metadata.rel_path in overrides
             extracted = self._extract_single_file(
                 cand.file_metadata.rel_path, 
                 reason=f"Retrieved: {cand.score} pts",
-                full=deep_extract,
-                runtime=runtime
+                matched_symbols=cand.matched_symbols,
+                mode=mode,
+                max_full_lines=1000 if is_override else 100, 
+                runtime=runtime,
+                is_full_override=is_override
             )
             if extracted:
                 context.related_files.append(extracted)
 
         return context
 
-    def _extract_single_file(self, rel_path: str, reason: str, full: bool = False, runtime: Optional[RuntimeAnalyzer] = None) -> Optional[ExtractedFile]:
+    def _extract_single_file(self, rel_path: str, reason: str, matched_symbols: List[str] = None, mode: str = "feature", max_full_lines: int = 100, runtime: Optional[RuntimeAnalyzer] = None, is_full_override: bool = False) -> Optional[ExtractedFile]:
         metadata = self.index.get_file_metadata(rel_path)
         if not metadata:
             return None
@@ -62,50 +72,91 @@ class ExtractionEngine:
             reason=reason
         )
 
+        # If it's a full override, extract the whole file as a single slice immediately
+        if is_full_override:
+            full_slice = self.slicer.extract_full_file(rel_path, "Full File Override", max_lines=2000)
+            if full_slice:
+                full_slice.expansion_type = "full"
+                extracted.slices.append(full_slice)
+                return extracted
+
+        # 1. Identify Anchors
+        anchor_set = set(matched_symbols or [])
         runtime_symbols: Set[str] = set()
-        runtime_lines: Set[int] = set()
         if runtime:
             for art in runtime.get_active_artifacts():
                 for frame in art.frames:
-                    if rel_path in frame.file_path: # Match file
-                        if frame.symbol_name:
-                            runtime_symbols.add(frame.symbol_name)
-                        runtime_lines.add(frame.line_number)
+                    if rel_path in frame.file_path and frame.symbol_name:
+                        runtime_symbols.add(frame.symbol_name)
+        
+        anchor_set.update(runtime_symbols)
 
-        if full:
-            # Extract full file content (with limits)
+        # Check file size
+        abs_path = Path(self.root_path) / rel_path
+        line_count = 0
+        if abs_path.is_file():
+            try:
+                with open(abs_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    line_count = sum(1 for _ in f)
+            except Exception: pass
+
+        if line_count <= max_full_lines:
             full_slice = self.slicer.extract_full_file(rel_path, reason)
-            if full_slice:
-                extracted.slices.append(full_slice)
-        else:
-            # First prioritize artifacts
-            for art in artifacts:
-                art_slice = self.slicer.extract_lines(rel_path, art.start_line, art.end_line, f"Framework Artifact: {art.artifact_type} ({art.name})")
-                if art_slice:
-                    extracted.slices.append(art_slice)
+            if full_slice: extracted.slices.append(full_slice)
+            return extracted
+
+        # 2. Extract Artifacts (Always high priority)
+        for art in artifacts:
+            art_slice = self.slicer.extract_lines(rel_path, art.start_line, art.end_line, f"Framework Artifact: {art.artifact_type}")
+            if art_slice:
+                art_slice.expansion_type = "exact"
+                extracted.slices.append(art_slice)
+
+        # 3. Extract Anchors with Expansion
+        for sym_name in anchor_set:
+            sym = next((s for s in symbols if s.name == sym_name), None)
+            if not sym: continue
             
-            # Prioritize runtime-failed symbols
-            for sym in symbols:
-                if sym.name in runtime_symbols or (sym.start_line <= max(runtime_lines, default=-1) <= sym.end_line):
-                    sym_slice = self.slicer.extract_symbol(rel_path, sym, reason + " [RUNTIME ERROR]")
-                    if sym_slice:
-                        extracted.slices.append(sym_slice)
-                    
-            # Then Relationship-Aware Extraction: Find symbols with inbound calls
-            called_symbols = set()
-            for sym in symbols:
-                start_id = f"{rel_path}:{sym.name}"
+            # Exact Match
+            sym_slice = self.slicer.extract_symbol(rel_path, sym, f"Anchor: {sym_name}")
+            if sym_slice:
+                sym_slice.anchor_symbol = sym_name
+                sym_slice.expansion_type = "exact"
+                extracted.slices.append(sym_slice)
+
+            # MODE-SPECIFIC SEMANTIC EXPANSION
+            if mode == "refactor":
+                # Refactor Mode: Expand to ALL callers/callees in the same file
+                start_id = f"{rel_path}:{sym_name}"
+                # Inbound (Callers)
                 inbounds = self.traversal.traverse_inbound(start_id, max_depth=1)
-                if inbounds:
-                    called_symbols.add(sym.name)
+                for path_result in inbounds:
+                    caller_id = path_result.target_id
+                    if caller_id.startswith(rel_path + ":"):
+                        c_name = caller_id.split(':')[1]
+                        c_sym = next((s for s in symbols if s.name == c_name), None)
+                        if c_sym:
+                            c_slice = self.slicer.extract_symbol(rel_path, c_sym, f"Caller of {sym_name}")
+                            if c_slice:
+                                c_slice.anchor_symbol = sym_name
+                                c_slice.expansion_type = "dependency"
+                                extracted.slices.append(c_slice)
             
-            prioritized_symbols = [s for s in symbols if s.name in called_symbols and s.name not in [a.name for a in artifacts] and s.name not in runtime_symbols]
-            if not prioritized_symbols and not artifacts and not runtime_symbols:
-                prioritized_symbols = symbols[:3] # Fallback to first few
-
-            for sym in prioritized_symbols:
-                sym_slice = self.slicer.extract_symbol(rel_path, sym, reason + " [Called]")
-                if sym_slice:
-                    extracted.slices.append(sym_slice)
-
+            elif mode == "bugfix":
+                # Bugfix Mode: Tight proximity (nearby lines/comments)
+                # Slicer.extract_symbol already includes some padding
+                pass 
+                
+            elif mode == "feature":
+                # Feature Mode: Expand to related Types/Interfaces
+                for other_sym in symbols:
+                    if other_sym.type in {"class", "interface"} and other_sym.name != sym_name:
+                        dist = min(abs(other_sym.start_line - sym.end_line), abs(sym.start_line - other_sym.end_line))
+                        if dist < 30:
+                            p_slice = self.slicer.extract_symbol(rel_path, other_sym, f"Context for {sym_name}")
+                            if p_slice:
+                                p_slice.anchor_symbol = sym_name
+                                p_slice.expansion_type = "proximity"
+                                extracted.slices.append(p_slice)
+                            
         return extracted

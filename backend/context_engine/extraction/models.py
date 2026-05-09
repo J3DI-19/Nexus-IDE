@@ -2,12 +2,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from ..models.symbol import Symbol
 from ..models.artifact import FrameworkArtifact
-
-class CodeSlice(BaseModel):
-    content: str
-    start_line: int
-    end_line: int
-    reason: str
+from ..models.extraction import CodeSlice
 
 class ExtractedFile(BaseModel):
     rel_path: str

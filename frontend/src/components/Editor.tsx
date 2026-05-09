@@ -8,6 +8,7 @@ interface EditorProps {
   tabs: Tab[];
   onSelectTab: (path: string) => void;
   onCloseTab: (e: React.MouseEvent, path: string) => void;
+  onContentChange?: (path: string, content: string) => void;
 }
 
 const getLanguage = (path: string | null) => {
@@ -32,7 +33,8 @@ const Editor: React.FC<EditorProps> = ({
   activeTab,
   tabs,
   onSelectTab,
-  onCloseTab
+  onCloseTab,
+  onContentChange
 }) => {
 
   // ===== WELCOME STATE =====
@@ -63,24 +65,27 @@ const Editor: React.FC<EditorProps> = ({
   }
 
   // ===== EDITOR STATE =====
+  const safeTabs = Array.isArray(tabs) ? tabs : [];
+
   return (
     <div className="editor-root">
 
       {/* TAB BAR */}
       <div className="tab-bar">
-        {tabs.map((tab) => {
+        {safeTabs.map((tab) => {
           const isActive = activeTab?.path === tab.path;
 
           return (
             <div
               key={tab.path}
               onClick={() => onSelectTab(tab.path)}
-              className={`tab ${isActive ? 'active' : ''}`}
+              className={`tab ${isActive ? 'active' : ''} ${tab.isDirty ? 'dirty' : ''}`}
             >
               <FileCode size={14} className="opacity-70" />
 
-              <span className="truncate">
+              <span className="tab-title truncate">
                 {tab.path.split('/').pop()}
+                {tab.isDirty && <span className="tab-dirty-indicator">●</span>}
               </span>
 
               <div
@@ -108,8 +113,13 @@ const Editor: React.FC<EditorProps> = ({
             path={activeTab.path}
             language={getLanguage(activeTab.path)}
             value={activeTab.content || ""} // 🔥 SAFETY FIX
+            onChange={(val) => {
+              if (val !== undefined && onContentChange) {
+                onContentChange(activeTab.path, val);
+              }
+            }}
             options={{
-              readOnly: true,
+              readOnly: false,
               minimap: { enabled: true },
               fontSize: 14,
               scrollBeyondLastLine: false,

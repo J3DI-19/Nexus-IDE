@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 from utils.security import get_project_root, is_safe_path
 from context_engine.core.scanner import fast_recursive_scan
 from context_engine.core.pipeline import pipeline
@@ -20,11 +20,14 @@ router = APIRouter()
 class PromptRequest(BaseModel):
     file: str
     goal: str
+    include_slices: bool = False
 
 class AssembleRequest(BaseModel):
     task: str
     active_file: str
     selected_files: List[str]
+    selected_slices: Optional[Dict[str, List[int]]] = None # File path -> List of slice indices
+    full_file_overrides: Optional[List[str]] = None # List of file paths to include entirely
     mode: Optional[str] = "feature"
 
 class ImpactRequest(BaseModel):
@@ -118,10 +121,16 @@ async def ingest_runtime_log(request: RuntimeLogRequest):
 @router.get("/context/runtime")
 async def get_runtime_artifacts():
     """
-    Returns the currently active runtime artifacts.
+    Returns the currently active runtime artifacts, execution chains, and hot symbols.
     """
     artifacts = pipeline.runtime.get_active_artifacts()
-    return {"artifacts": [a.dict() for a in artifacts]}
+    chains = pipeline.runtime.get_execution_chains()
+    hot_symbols = pipeline.runtime.get_hot_symbols()
+    return {
+        "artifacts": [a.dict() for a in artifacts],
+        "execution_chains": chains,
+        "hot_symbols": hot_symbols
+    }
 
 @router.post("/context/runtime/clear")
 async def clear_runtime():
@@ -145,7 +154,6 @@ async def analyze_impact(request: ImpactRequest):
         print(f"IMPACT ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @router.post("/context/retrieve")
 async def retrieve_context(request: PromptRequest):
     """
@@ -155,9 +163,11 @@ async def retrieve_context(request: PromptRequest):
         _ensure_context_ready()
         query = RetrievalQuery(
             task=request.goal,
-            active_file=request.file
+            active_file=request.file,
+            mode="feature",
+            include_slices=request.include_slices
         )
-        candidates = pipeline.retrieval.retrieve(query)
+        candidates = pipeline.retrieve(query)
         return {"candidates": [c.dict() for c in candidates]}
     except Exception as e:
         print(f"RETRIEVAL ERROR: {e}")
@@ -181,23 +191,47 @@ async def assemble_context(request: AssembleRequest):
             metadata = pipeline.index.get_file_metadata(rel_path)
             if metadata:
                 artifacts = pipeline.index.get_artifacts_for_file(rel_path)
+                symbols = pipeline.index.get_symbols_for_file(rel_path)
                 candidates.append(ContextCandidate(
                     file_metadata=metadata,
                     score=100.0,
                     score_breakdown=[ScoreComponent(factor="User Selection", points=100.0, reason="Manually selected")],
-                    matched_symbols=[s.name for s in pipeline.index.get_symbols_for_file(rel_path)],
+                    matched_symbols=[s.name for s in symbols],
                     matched_artifacts=[a.artifact_type for a in artifacts]
                 ))
         
-        context = pipeline.extraction.extract_context(query.active_file, candidates)
+        context = pipeline.extraction.extract_context(
+            query.active_file, 
+            candidates, 
+            mode=mode.value, 
+            runtime=pipeline.runtime,
+            full_file_overrides=request.full_file_overrides
+        )
         
+        # SLICE FILTERING: Prune extraction context based on user's surgical selection
+        # Skip pruning for files in full_file_overrides
+        overrides = set(request.full_file_overrides or [])
+        
+        if request.selected_slices:
+            if context.active_file and context.active_file.rel_path in request.selected_slices:
+                if context.active_file.rel_path not in overrides:
+                    indices = set(request.selected_slices[context.active_file.rel_path])
+                    context.active_file.slices = [s for i, s in enumerate(context.active_file.slices) if i in indices]
+            
+            for rel_file in context.related_files:
+                if rel_file.rel_path in request.selected_slices:
+                    if rel_file.rel_path not in overrides:
+                        indices = set(request.selected_slices[rel_file.rel_path])
+                        rel_file.slices = [s for i, s in enumerate(rel_file.slices) if i in indices]
+
         # Also run impact analysis
         impact_result = None
         if query.active_file:
             impact_query = ImpactQuery(active_file=query.active_file, max_depth=3)
             impact_result = pipeline.impact.analyze(impact_query)
             
-        prompt = pipeline.prompt_builder.build_prompt(query, context, impact=impact_result, mode=mode)
+        runtime_artifacts = pipeline.runtime.get_active_artifacts()
+        prompt = pipeline.prompt_builder.build_prompt(query, context, impact=impact_result, mode=mode, runtime_artifacts=runtime_artifacts)
         return {"prompt": prompt}
     except Exception as e:
         print(f"ASSEMBLY ERROR: {e}")
@@ -218,51 +252,3 @@ async def generate_prompt_v2(request: PromptRequest):
     except Exception as e:
         print(f"PROMPT V2 ERROR: {e}")
         raise HTTPException(status_code=500, detail=f"Context Engine failed: {str(e)}")
-
-@router.post("/prompt")
-async def generate_prompt(request: PromptRequest):
-    """Legacy prompt generation using templates and basic heuristics."""
-    root = get_project_root()
-    if not root:
-        raise HTTPException(status_code=400, detail="Project root not set")
-
-    if not request.file or not request.file.strip():
-        raise HTTPException(status_code=400, detail="Path cannot be empty.")
-    
-    try:
-        resolved_path = is_safe_path(root / request.file)
-        if not resolved_path.is_file():
-            raise HTTPException(status_code=404, detail=f"File not found: {request.file}")
-        
-        with open(resolved_path, "r", encoding="utf-8", errors="ignore") as f:
-            full_content = f.read()
-        
-        all_files = fast_recursive_scan(str(root))
-        
-        safe_content = full_content.strip() or "Empty file"
-        escaped_content = safe_content.replace("{", "{{").replace("}", "}}")
-        
-        language = detect_language(request.file)
-        file_content_block = format_code_block(escaped_content, language)
-        project_context = build_project_context(request.file, all_files)
-        structure_section = build_structure_section(full_content, request.file)
-
-        template = load_prompt_template()
-        try:
-            prompt = template.format(
-                project_context=project_context,
-                file_path=request.file,
-                structure_section=structure_section,
-                file_content_block=file_content_block,
-                errors="No known runtime or compile errors.",
-                goal=request.goal
-            )
-        except KeyError as e:
-            raise HTTPException(status_code=500, detail=f"Template placeholder missing: {str(e)}")
-        
-        return {"prompt": prompt}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prompt generation failed: {str(e)}")

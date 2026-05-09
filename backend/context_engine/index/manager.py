@@ -13,8 +13,8 @@ class IndexManager:
         self.artifacts: Dict[str, List[FrameworkArtifact]] = {} # rel_path -> artifacts
         
         # Accelerated lookup structures
-        self._symbol_to_file: Dict[str, str] = {}  # symbol_name -> rel_path
         self._import_graph: Dict[str, Set[str]] = {}  # file -> set of imported files/modules
+        self._symbol_registry: Dict[str, Set[str]] = {} # symbol_name -> set of files
 
     def register_extraction_result(self, result: ExtractionResult):
         rel_path = result.file_metadata.rel_path
@@ -24,8 +24,10 @@ class IndexManager:
         
         # 2. Update Symbols
         self.symbols[rel_path] = result.symbols
-        for symbol in result.symbols:
-            self._symbol_to_file[symbol.name] = rel_path
+        for sym in result.symbols:
+            if sym.name not in self._symbol_registry:
+                self._symbol_registry[sym.name] = set()
+            self._symbol_registry[sym.name].add(rel_path)
             
         # 3. Update Dependency Edges
         prefix = f"{rel_path}:"
@@ -48,7 +50,9 @@ class IndexManager:
         return self.symbols.get(rel_path, [])
 
     def get_file_for_symbol(self, symbol_name: str) -> Optional[str]:
-        return self._symbol_to_file.get(symbol_name)
+        # Return the first file found (highest probability)
+        files = self._symbol_registry.get(symbol_name)
+        return next(iter(files)) if files else None
 
     def get_dependencies(self, rel_path: str) -> List[DependencyEdge]:
         prefix = f"{rel_path}:"
@@ -62,5 +66,5 @@ class IndexManager:
         self.symbols.clear()
         self.edges.clear()
         self.artifacts.clear()
-        self._symbol_to_file.clear()
         self._import_graph.clear()
+        self._symbol_registry.clear()

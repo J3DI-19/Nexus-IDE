@@ -128,6 +128,16 @@
   border-left: 2px solid var(--accent-color);
 }
 
+.explorer-item.drag-over {
+  background-color: rgba(162, 119, 255, 0.15);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--accent-color);
+}
+
+.explorer-item.dragging {
+  opacity: 0.5;
+}
+
 .explorer-arrow {
   width: 12px;
   display: flex;
@@ -157,6 +167,23 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  opacity: 0.72;
+  transition: all 0.15s ease;
+}
+
+.explorer-item.dirty .explorer-name {
+  opacity: 1;
+  font-style: italic;
+  color: var(--text-main);
+}
+
+.explorer-dirty-indicator {
+  margin-left: 6px;
+  font-size: 8px;
+  color: var(--accent-color);
+  font-style: normal;
+  opacity: 0.8;
+  flex-shrink: 0;
 }
 
 .explorer-children {
@@ -173,4 +200,38 @@
   gap: 8px;
   text-align: center;
   opacity: 0.6;
+}
+
+.explorer-inline-input {
+  width: 100%;
+  background: var(--bg-dark);
+  border: 1px solid var(--accent-color);
+  color: var(--text-main);
+  padding: 1px 4px;
+  font-size: 12.5px;
+  border-radius: 3px;
+  outline: none;
+}
+
+.explorer-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.explorer-action-btn:hover {
+  background-color: rgba(255,255,255,0.1);
+  color: var(--text-main);
+}
+
+.explorer-action-btn.delete:hover {
+  background-color: rgba(255, 80, 80, 0.15);
+  color: rgba(255, 120, 120, 1);
 }

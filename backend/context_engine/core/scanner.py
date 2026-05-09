@@ -12,10 +12,11 @@ IGNORED_EXTENSIONS = {
     ".exe", ".bin", ".pyc", ".o", ".obj", ".dll", ".so", ".dylib", ".woff", ".woff2", ".ttf"
 }
 
-def fast_recursive_scan(root_path: str) -> List[str]:
+def fast_recursive_scan(root_path: str, include_dirs: bool = False) -> List[str]:
     """
     High-performance directory traversal.
     Returns sorted list of relative paths.
+    Directories are included with a trailing slash if include_dirs is True.
     """
     file_list = []
     
@@ -27,6 +28,9 @@ def fast_recursive_scan(root_path: str) -> List[str]:
                         continue
                     
                     if entry.is_dir(follow_symlinks=False):
+                        if include_dirs:
+                            rel_path = os.path.relpath(entry.path, root_path)
+                            file_list.append(rel_path.replace("\\", "/") + "/")
                         _scan(entry.path)
                     elif entry.is_file(follow_symlinks=False):
                         ext = os.path.splitext(entry.name)[1].lower()

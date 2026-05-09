@@ -1,0 +1,47 @@
+---
+
+### [SYSTEM RULES]
+
+{{ rules }}
+
+---
+
+### [PROJECT CONTEXT]
+
+{% if warnings %}
+### [CRITICAL WARNINGS & CONSTRAINTS]
+{% for w in warnings %}
+[{{ w.severity }}] {{ w.affected_path }}: {{ w.message }}
+{% endfor %}
+{% endif %}
+
+{% if related_context %}
+{{ related_context }}
+{% else %}
+No additional context provided.
+{% endif %}
+
+---
+
+### [FILE CONTEXT]
+
+{{ active_file }}
+
+---
+
+### [RUNTIME DIAGNOSTICS]
+
+{% if runtime_diagnostics %}
+{{ runtime_diagnostics }}
+{% else %}
+No active runtime errors.
+{% endif %}
+
+---
+
+### [TASK]
+
+Goal: {{ task }}
+Modify ONLY what is necessary to achieve this goal. Avoid unrelated changes.
+
+Follow ALL rules strictly. Your response must be ONLY a valid unified diff patch.

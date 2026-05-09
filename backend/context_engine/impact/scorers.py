@@ -29,3 +29,10 @@ class ImpactScorer:
             return ScoreComponent(factor="Architectural Impact", points=45.0, reason="Impacts Data Model/Schema")
             
         return ScoreComponent(factor="Architectural Impact", points=20.0, reason="Impacts framework artifacts")
+
+    def score_symbol_precision(self) -> ScoreComponent:
+        return ScoreComponent(
+            factor="Symbol Precision",
+            points=15.0,
+            reason="Direct impact on a specific symbol detected"
+        )

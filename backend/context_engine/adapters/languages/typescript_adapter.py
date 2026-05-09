@@ -32,33 +32,36 @@ class TypeScriptAdapter(LanguageAdapter):
             class_match = class_pattern.search(line)
             if class_match:
                 current_class = class_match.group(1)
+                end_line = self._find_block_end(lines, i)
                 symbols.append(Symbol(
                     name=current_class,
                     type="class",
                     start_line=line_num,
-                    end_line=line_num # Will refine end_line if we do block tracking
+                    end_line=end_line
                 ))
                 continue
 
             # Interface detection
             interface_match = interface_pattern.search(line)
             if interface_match:
+                end_line = self._find_block_end(lines, i)
                 symbols.append(Symbol(
                     name=interface_match.group(1),
                     type="interface",
                     start_line=line_num,
-                    end_line=line_num
+                    end_line=end_line
                 ))
                 continue
 
             # Function detection
             func_match = function_pattern.search(line) or const_func_pattern.search(line)
             if func_match:
+                end_line = self._find_block_end(lines, i)
                 symbols.append(Symbol(
                     name=func_match.group(1),
                     type="function",
                     start_line=line_num,
-                    end_line=line_num
+                    end_line=end_line
                 ))
                 continue
 
@@ -73,21 +76,43 @@ class TypeScriptAdapter(LanguageAdapter):
                 ))
                 continue
 
-            # Method detection (simplified: must be indented or follow class)
+            # Method detection
             if current_class:
                 method_match = method_pattern.search(line)
                 if method_match:
                     name = method_match.group(1)
                     if name not in {"if", "for", "while", "switch", "catch"}:
+                        end_line = self._find_block_end(lines, i)
                         symbols.append(Symbol(
                             name=name,
                             type="method",
                             start_line=line_num,
-                            end_line=line_num,
+                            end_line=end_line,
                             parent_id=current_class
                         ))
 
         return symbols
+
+    def _find_block_end(self, lines: List[str], start_idx: int) -> int:
+        """Finds the closing brace for a block starting at start_idx."""
+        brace_count = 0
+        found_first_brace = False
+        
+        for i in range(start_idx, len(lines)):
+            line = lines[i]
+            # Strip comments and strings for better accuracy (simplified)
+            clean_line = re.sub(r'//.*|/\*.*?\*/|\'[^\']*\'|"[^"]*"|`[^`]*`', '', line)
+            
+            brace_count += clean_line.count('{')
+            if not found_first_brace and '{' in clean_line:
+                found_first_brace = True
+            
+            brace_count -= clean_line.count('}')
+            
+            if found_first_brace and brace_count <= 0:
+                return i + 1
+        
+        return start_idx + 1
 
     def extract_dependencies(self, content: str, file_path: str) -> List[DependencyEdge]:
         edges = []
@@ -114,19 +139,25 @@ class TypeScriptAdapter(LanguageAdapter):
             # Imports
             import_match = import_pattern.search(line)
             if import_match:
+                target = import_match.group(1)
                 edges.append(DependencyEdge(
                     source_id=file_path,
-                    target_id=import_match.group(1),
-                    type="import"
+                    target_id=target,
+                    raw_target=target,
+                    type="import",
+                    is_resolved=False
                 ))
 
             # Inheritance
             extends_match = extends_pattern.search(line)
             if extends_match:
+                target = extends_match.group(2)
                 edges.append(DependencyEdge(
                     source_id=f"{file_path}:{extends_match.group(1)}",
-                    target_id=extends_match.group(2),
-                    type="inheritance"
+                    target_id=target,
+                    raw_target=target,
+                    type="inheritance",
+                    is_resolved=False
                 ))
 
             # Calls (very naive, should ideally track current_symbol)
@@ -144,7 +175,9 @@ class TypeScriptAdapter(LanguageAdapter):
                         edges.append(DependencyEdge(
                             source_id=f"{file_path}:{current_symbol}",
                             target_id=call,
+                            raw_target=call,
                             type="call",
+                            is_resolved=False,
                             metadata={"line": str(line_num)}
                         ))
 

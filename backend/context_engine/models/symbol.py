@@ -12,6 +12,8 @@ class Symbol(BaseModel):
 class DependencyEdge(BaseModel):
     source_id: str  # Could be file rel_path or symbol_id (e.g. file_path:symbol_name)
     target_id: str
+    raw_target: Optional[str] = None  # Original AST string before resolution
     type: str  # "import", "call", "inheritance", "composition", "reference"
+    is_resolved: bool = False
     is_external: bool = False
     metadata: Dict[str, str] = {} # Optional context like line number

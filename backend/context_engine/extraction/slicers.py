@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 from typing import List, Optional
 from .models import CodeSlice
@@ -48,6 +49,61 @@ class CodeSlicer:
             end_line, 
             reason=f"Symbol: {symbol.name} ({reason})"
         )
+
+    def extract_imports(self, rel_path: str) -> Optional[CodeSlice]:
+        """Extracts import statements from the top of the file."""
+        abs_path = self.root_path / rel_path
+        if not abs_path.is_file():
+            return None
+
+        ext = rel_path.lower().split('.')[-1]
+        
+        # Simple heuristic: take lines that look like imports until we hit real code
+        import_patterns = {
+            'py': re.compile(r'^(import\s+|from\s+)'),
+            'ts': re.compile(r'^(import\s+)'),
+            'tsx': re.compile(r'^(import\s+)'),
+            'js': re.compile(r'^(import\s+|const\s+.*require\()'),
+            'jsx': re.compile(r'^(import\s+|const\s+.*require\()'),
+        }
+        
+        pattern = import_patterns.get(ext)
+        if not pattern:
+            return None
+
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+            
+            import_lines = []
+            last_import_idx = 0
+            for i, line in enumerate(lines):
+                if pattern.match(line.strip()) or line.strip() == "":
+                    if line.strip() != "":
+                        import_lines.append(line)
+                        last_import_idx = i + 1
+                elif i > 0 and (lines[i-1].strip().endswith(',') or lines[i-1].strip().startswith('{')):
+                    # Likely multi-line import
+                    import_lines.append(line)
+                    last_import_idx = i + 1
+                elif i > 50: # Don't scan too far
+                    break
+                else:
+                    # Not an import and not clearly a continuation
+                    if line.strip() != "":
+                        break
+            
+            if not import_lines:
+                return None
+                
+            return CodeSlice(
+                content="".join(import_lines).strip(),
+                start_line=1,
+                end_line=last_import_idx,
+                reason="Module Imports"
+            )
+        except Exception:
+            return None
 
     def _expand_symbol_range(self, rel_path: str, start_line: int) -> int:
         """Deterministically expands from a start line to find the matching closing brace or tag."""

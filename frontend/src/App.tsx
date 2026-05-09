@@ -3,6 +3,7 @@ import { Braces, FileText, Folder, PanelLeft, PanelRight, Search, X } from 'luci
 import Explorer from './components/Explorer';
 import Editor from './components/Editor';
 import RightPanel from './components/RightPanel';
+import ConfirmDialog from './components/ui/ConfirmDialog';
 import { buildTree, FileNode } from './utils/buildTree';
 
 const API_BASE = 'http://127.0.0.1:8000';
@@ -10,6 +11,8 @@ const API_BASE = 'http://127.0.0.1:8000';
 export type Tab = {
   path: string;
   content: string;
+  savedContent: string;
+  isDirty: boolean;
 };
 
 type WorkspaceSymbol = {
@@ -43,6 +46,25 @@ const App: React.FC = () => {
 
   const [showExplorer, setShowExplorer] = useState(true);
   const [showRightPanel, setShowRightPanel] = useState(true);
+
+  // Custom Confirmation state
+  const [confirmConfig, setConfirmConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    description: string;
+    confirmText?: string;
+    onConfirm: () => void;
+    variant?: 'default' | 'destructive';
+  }>({
+    isOpen: false,
+    title: '',
+    description: '',
+    onConfirm: () => {},
+  });
+
+  const confirm = (config: Omit<typeof confirmConfig, 'isOpen'>) => {
+    setConfirmConfig({ ...config, isOpen: true });
+  };
 
   const fetchProject = async () => {
     try {
@@ -120,7 +142,7 @@ const App: React.FC = () => {
       if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
       const text = await res.text();
 
-      const newTab = { path, content: text };
+      const newTab = { path, content: text, savedContent: text, isDirty: false };
       setTabs(prev => [...prev, newTab]);
       setActiveTabPath(path);
     } catch (err: any) {
@@ -130,6 +152,26 @@ const App: React.FC = () => {
 
   const handleCloseTab = (e: React.MouseEvent, path: string) => {
     e.stopPropagation();
+    
+    if (!Array.isArray(tabs)) return;
+    const tabToClose = tabs.find(t => t.path === path);
+    if (tabToClose?.isDirty) {
+      confirm({
+        title: `Unsaved Changes`,
+        description: `You have unsaved changes in ${path.split('/').pop()}. Close anyway?`,
+        confirmText: 'Close Anyway',
+        variant: 'destructive',
+        onConfirm: () => {
+          const newTabs = tabs.filter(t => t.path !== path);
+          setTabs(newTabs);
+          if (activeTabPath === path) {
+            setActiveTabPath(newTabs.length ? newTabs[newTabs.length - 1].path : null);
+          }
+        }
+      });
+      return;
+    }
+
     const newTabs = tabs.filter(t => t.path !== path);
     setTabs(newTabs);
 
@@ -138,7 +180,238 @@ const App: React.FC = () => {
     }
   };
 
-  const activeTab = tabs.find(t => t.path === activeTabPath) || null;
+  const handleTabContentChange = (path: string, newContent: string) => {
+    setTabs(prev => {
+      if (!Array.isArray(prev)) return [];
+      return prev.map(tab => {
+        if (tab.path === path) {
+          const isDirty = newContent !== tab.savedContent;
+          return { ...tab, content: newContent, isDirty };
+        }
+        return tab;
+      });
+    });
+  };
+
+  const handleSaveFile = async () => {
+    if (!tabs || !Array.isArray(tabs) || !activeTab || !activeTab.isDirty) return;
+    try {
+      setLoading(true);
+      const res = await fetch(`${API_BASE}/file/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: activeTab.path, content: activeTab.content })
+      });
+      if (!res.ok) throw new Error("Failed to save");
+      
+      setTabs(prev => {
+        if (!Array.isArray(prev)) return [];
+        return prev.map(tab => {
+          if (tab.path === activeTab.path) {
+            return { ...tab, savedContent: tab.content, isDirty: false };
+          }
+          return tab;
+        });
+      });
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        handleSaveFile();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTabPath, tabs]); // Use activeTabPath for more stable dependency
+
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!Array.isArray(tabs)) return;
+      const hasDirtyTabs = tabs.some(t => t.isDirty);
+      if (hasDirtyTabs) {
+        e.preventDefault();
+        e.returnValue = ''; // Required for Chrome
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [tabs]);
+
+  const handleCreateFile = async (path: string, isFolder: boolean) => {
+    try {
+      setLoading(true);
+      const endpoint = isFolder ? '/folder/create' : '/file/create';
+      const res = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Creation failed");
+      }
+      await fetchProject();
+      if (!isFolder) {
+        handleFileSelect(path);
+      }
+    } catch (err: any) {
+      alert(`Error creating: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRename = async (oldPath: string, newPath: string) => {
+    try {
+      setLoading(true);
+      const res = await fetch(`${API_BASE}/file/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_path: oldPath, new_path: newPath })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Rename failed");
+      }
+      
+      // Update tabs
+      setTabs(prev => {
+        if (!Array.isArray(prev)) return [];
+        return prev.map(tab => {
+          if (tab.path === oldPath || tab.path.startsWith(oldPath + '/')) {
+            return { ...tab, path: tab.path.replace(oldPath, newPath) };
+          }
+          return tab;
+        });
+      });
+
+      if (activeTabPath === oldPath || (activeTabPath && activeTabPath.startsWith(oldPath + '/'))) {
+        setActiveTabPath(prev => prev ? prev.replace(oldPath, newPath) : null);
+      }
+
+      await fetchProject();
+    } catch (err: any) {
+      alert(`Error renaming: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMove = async (sourcePath: string, targetDirPath: string) => {
+    try {
+      setLoading(true);
+      const fileName = sourcePath.split('/').filter(Boolean).pop();
+      if (!fileName) throw new Error("Invalid source path");
+
+      // Dest path is the target directory + the file name
+      const destPath = targetDirPath ? `${targetDirPath}/${fileName}` : fileName;
+
+      if (sourcePath === destPath) return; // No-op
+
+      const res = await fetch(`${API_BASE}/file/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_path: sourcePath, dest_path: destPath })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Move failed");
+      }
+
+      // Update tabs (remap paths for moved files or folders)
+      setTabs(prev => {
+        if (!Array.isArray(prev)) return [];
+        return prev.map(tab => {
+          if (tab.path === sourcePath || tab.path.startsWith(sourcePath + '/')) {
+            return { ...tab, path: tab.path.replace(sourcePath, destPath) };
+          }
+          return tab;
+        });
+      });
+
+      if (activeTabPath === sourcePath || (activeTabPath && activeTabPath.startsWith(sourcePath + '/'))) {
+        setActiveTabPath(prev => prev ? prev.replace(sourcePath, destPath) : null);
+      }
+
+      await fetchProject();
+    } catch (err: any) {
+      alert(`Error moving: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (path: string) => {
+    const findNode = (nodes: FileNode[], targetPath: string): FileNode | null => {
+      for (const node of nodes) {
+        if (node.path === targetPath) return node;
+        if (node.children) {
+          const found = findNode(node.children, targetPath);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    const targetNode = findNode(tree, path);
+    const isFolder = targetNode?.type === 'folder';
+    const nodeName = targetNode?.name || path.split('/').filter(Boolean).pop();
+
+    confirm({
+      title: `Delete ${isFolder ? 'Folder' : 'File'}`,
+      description: `Are you sure you want to delete "${nodeName}"? ${isFolder ? 'This will recursively delete all contents and subfolders.' : ''} This action cannot be undone.`,
+      confirmText: 'Delete',
+      variant: 'destructive',
+      onConfirm: async () => {
+        try {
+          setLoading(true);
+          const res = await fetch(`${API_BASE}/file/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || "Delete failed");
+          }
+
+          // Close relevant tabs
+          setTabs(prev => {
+            if (!Array.isArray(prev)) return [];
+            return prev.filter(tab => tab.path !== path && !tab.path.startsWith(path + '/'));
+          });
+
+          // Update active tab path if it was deleted
+          if (activeTabPath === path || (activeTabPath && activeTabPath.startsWith(path + '/'))) {
+            setActiveTabPath(null);
+          }
+
+          await fetchProject();
+        } catch (err: any) {
+          alert(`Error deleting: ${err.message}`);
+        } finally {
+          setLoading(false);
+        }
+      }
+    });
+  };
+
+  const activeTab = useMemo(() => {
+    if (!Array.isArray(tabs)) return null;
+    return tabs.find(t => t.path === activeTabPath) || null;
+  }, [tabs, activeTabPath]);
+
+  const dirtyPaths = useMemo(() => {
+    if (!Array.isArray(tabs)) return new Set<string>();
+    return new Set(tabs.filter(t => t.isDirty).map(t => t.path));
+  }, [tabs]);
 
   const searchableFiles = useMemo(() => {
     const files: FileNode[] = [];
@@ -220,7 +493,21 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-full w-full overflow-hidden">
-
+      
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={confirmConfig.isOpen}
+        title={confirmConfig.title}
+        description={confirmConfig.description}
+        confirmText={confirmConfig.confirmText}
+        variant={confirmConfig.variant}
+        loading={loading}
+        onConfirm={() => {
+          confirmConfig.onConfirm();
+          setConfirmConfig(prev => ({ ...prev, isOpen: false }));
+        }}
+        onCancel={() => setConfirmConfig(prev => ({ ...prev, isOpen: false }))}
+      />
       {/* ===== LEFT PANEL ===== */}
       {showExplorer && (
         <div className="sidebar flex flex-col h-full active-context">
@@ -298,7 +585,12 @@ const App: React.FC = () => {
                 <Explorer
                   tree={tree}
                   selectedPath={activeTabPath}
+                  dirtyPaths={dirtyPaths}
                   onFileSelect={handleFileSelect}
+                  onCreateFile={handleCreateFile}
+                  onRename={handleRename}
+                  onDelete={handleDelete}
+                  onMove={handleMove}
                 />
               </div>
             )}
@@ -453,6 +745,7 @@ const App: React.FC = () => {
             tabs={tabs}
             onSelectTab={setActiveTabPath}
             onCloseTab={handleCloseTab}
+            onContentChange={handleTabContentChange}
           />
         </div>
       </div>

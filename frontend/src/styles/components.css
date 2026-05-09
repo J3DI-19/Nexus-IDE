@@ -60,3 +60,146 @@
   cursor: pointer;
   color: var(--text-main);
 }
+
+/* Modal / Dialog */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  padding: 16px;
+}
+
+.modal-content {
+  width: 100%;
+  max-width: 400px;
+  background-color: #1e1e1e;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  animation: modal-appear 0.2s ease-out;
+}
+
+@keyframes modal-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.modal-body {
+  padding: 20px;
+}
+
+.modal-flex {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.modal-icon-box {
+  padding: 8px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-icon-box.destructive {
+  background-color: rgba(255, 80, 80, 0.1);
+  color: #ff5050;
+}
+
+.modal-icon-box.default {
+  background-color: rgba(162, 119, 255, 0.1);
+  color: var(--accent-color);
+}
+
+.modal-text-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 4px;
+}
+
+.modal-description {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.5;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px;
+  background-color: rgba(255, 255, 255, 0.02);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.modal-btn {
+  padding: 8px 16px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+}
+
+.modal-btn-cancel {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.modal-btn-cancel:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: #ffffff;
+}
+
+.modal-btn-confirm {
+  font-weight: 600;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.modal-btn-confirm.default {
+  background: var(--accent-color);
+  opacity: 0.9;
+}
+
+.modal-btn-confirm.default:hover {
+  opacity: 1;
+  box-shadow: 0 4px 12px rgba(162, 119, 255, 0.2);
+}
+
+.modal-btn-confirm.destructive {
+  background: #ff5050;
+  opacity: 0.9;
+}
+
+.modal-btn-confirm.destructive:hover {
+  opacity: 1;
+  box-shadow: 0 4px 12px rgba(255, 80, 80, 0.2);
+}
+
+.modal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+

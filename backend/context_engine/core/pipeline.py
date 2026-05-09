@@ -10,8 +10,9 @@ from ..models.file import FileMetadata
 from ..models.extraction import ExtractionResult
 from ..adapters.registry import registry
 from ..index.manager import IndexManager
+from ..index.resolver import GraphResolver
 from ..retrieval.engine import RetrievalEngine
-from ..retrieval.models import RetrievalQuery
+from ..retrieval.models import RetrievalQuery, ContextCandidate
 from ..extraction.engine import ExtractionEngine
 from ..prompt_builder.engine import AdvancedPromptBuilder
 from ..prompt_builder.models import PromptMode
@@ -48,8 +49,35 @@ class ContextPipeline:
             
         # Initialize extraction engine with root_path
         self.extraction = ExtractionEngine(root_path, self.index)
+        
+        # 5. Graph Resolution (Stabilization Phase)
+        resolver = GraphResolver(self.index)
+        resolver.resolve_graph()
             
         return self.project_metadata
+
+    def retrieve(self, query: RetrievalQuery) -> List[ContextCandidate]:
+        """
+        Executes retrieval and optionally populates semantic slices.
+        """
+        if not self.extraction:
+            return []
+
+        candidates = self.retrieval.retrieve(query, runtime=self.runtime)
+        
+        if query.include_slices:
+            # Populate slices for each candidate
+            for cand in candidates:
+                extracted = self.extraction._extract_single_file(
+                    cand.file_metadata.rel_path,
+                    reason=f"Retrieved: {cand.score} pts",
+                    matched_symbols=cand.matched_symbols,
+                    runtime=self.runtime
+                )
+                if extracted:
+                    cand.slices = extracted.slices
+                    
+        return candidates
 
     def assemble_prompt(self, query: RetrievalQuery, mode: PromptMode = PromptMode.FEATURE) -> str:
         """
@@ -59,9 +87,9 @@ class ContextPipeline:
             return "Context Engine not initialized. Please open a project first."
 
         # 1. Retrieval (Pass Runtime)
-        candidates = self.retrieval.retrieve(query, runtime=self.runtime)
+        candidates = self.retrieve(query)
         
-        # 2. Extraction
+        # 2. Extraction (Already performed if include_slices was true, but assemble usually needs full context context)
         context = self.extraction.extract_context(query.active_file, candidates, runtime=self.runtime)
         
         # 3. Impact Analysis

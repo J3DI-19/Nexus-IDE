@@ -10,6 +10,10 @@ interface TaskInputProps {
   disabled: boolean;
   onRetrieve: () => void;
   onClear: () => void;
+  candidates: any[];
+  prompt: string;
+  impactCandidates: any[];
+  hasRuntime?: boolean;
 }
 
 const TaskInput: React.FC<TaskInputProps> = ({ 
@@ -20,15 +24,37 @@ const TaskInput: React.FC<TaskInputProps> = ({
   loading, 
   disabled, 
   onRetrieve,
-  onClear
+  onClear,
+  candidates,
+  prompt,
+  impactCandidates,
+  hasRuntime = false
 }) => {
-  const hasTaskState = Boolean(goal.trim()) || mode !== 'feature';
+  const hasTaskState = Boolean(
+    goal.trim() ||
+    candidates.length ||
+    prompt ||
+    impactCandidates.length
+  );
 
   return (
     <div className="panel-section">
-      <div className="panel-title accent">
-        <Sparkles size={13} />
-        <span>Context Workflow</span>
+      <div className="task-input-header">
+        <div className="task-input-title">
+          Context Workflow
+        </div>
+        {hasTaskState && (
+          <button
+            className="task-clear-btn"
+            onClick={onClear}
+            disabled={loading}
+            title="Clear workflow"
+            type="button"
+          >
+            <X size={12} />
+            <span>Clear</span>
+          </button>
+        )}
       </div>
 
       <div className="task-input-shell">
@@ -47,18 +73,6 @@ const TaskInput: React.FC<TaskInputProps> = ({
         
         <div className="task-label-row">
           <label className="task-field-label">Task</label>
-          {hasTaskState && (
-            <button
-              className="task-clear-btn"
-              onClick={onClear}
-              disabled={loading}
-              title="Clear task"
-              type="button"
-            >
-              <X size={11} />
-              Clear
-            </button>
-          )}
         </div>
         <textarea
           className="task-goal-input"
@@ -75,6 +89,13 @@ const TaskInput: React.FC<TaskInputProps> = ({
           <Wand2 size={13} />
           {loading ? 'Retrieving...' : 'Retrieve Context'}
         </button>
+
+        {hasRuntime && (
+          <div className="mt-2 flex items-center justify-center gap-1.5 opacity-40 text-[9px] italic">
+            <Sparkles size={10} />
+            <span>Execution-aware ranking active</span>
+          </div>
+        )}
       </div>
     </div>
   );

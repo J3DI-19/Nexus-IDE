@@ -52,6 +52,7 @@ class GraphTraversalEngine:
     def traverse_inbound(self, target_id: str, max_depth: int = 2) -> List[TraversalResult]:
         """
         Traverses inbound edges to find who calls/imports the target.
+        Handles mapping between symbols and files.
         """
         results = []
         visited = set()
@@ -68,7 +69,20 @@ class GraphTraversalEngine:
                 results.append(TraversalResult(current_id, path, depth, edge_types))
 
             if depth < max_depth:
+                # print(f"[DEBUG] Traversal visiting inbound for: {current_id}")
+                
+                # 1. Match Exact
                 inbound_edges = [e for e in self.index.edges if e.target_id == current_id]
+                
+                # 2. If current_id is a file, also match symbols within that file
+                if ':' not in current_id:
+                    inbound_edges.extend([e for e in self.index.edges if e.target_id.startswith(current_id + ":")])
+                
+                # 3. If current_id is a symbol, also match the containing file
+                else:
+                    file_part = current_id.split(':')[0]
+                    inbound_edges.extend([e for e in self.index.edges if e.target_id == file_part])
+
                 for edge in inbound_edges:
                     queue.append((
                         edge.source_id,

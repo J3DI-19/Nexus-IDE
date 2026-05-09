@@ -35,18 +35,47 @@
   cursor: pointer;
   border-right: 1px solid var(--border-color);
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-main);
   transition: all 0.15s ease;
+}
+
+.tab-title {
+  opacity: 0.65;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease,
+    font-style 0.15s ease;
 }
 
 .tab:hover {
   background-color: #232323;
 }
 
+.tab:hover .tab-title {
+  opacity: 0.85;
+}
+
 .tab.active {
   background-color: var(--bg-editor);
-  color: var(--text-main);
   border-top: 1px solid var(--accent-color);
+}
+
+.tab.active .tab-title {
+  opacity: 0.95;
+}
+
+.tab.dirty .tab-title {
+  opacity: 1;
+  font-style: italic;
+}
+
+.tab-dirty-indicator {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 8px;
+  color: rgba(255, 255, 255, 0.4);
+  font-style: normal !important;
+  transform: translateY(-1px);
 }
 
 .tab-close {

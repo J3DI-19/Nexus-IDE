@@ -54,15 +54,20 @@ class PythonAdapter(LanguageAdapter):
                         edges.append(DependencyEdge(
                             source_id=file_path,
                             target_id=alias.name,
-                            type="import"
+                            raw_target=alias.name,
+                            type="import",
+                            is_resolved=False
                         ))
                 elif isinstance(node, ast.ImportFrom):
                     module = node.module or ""
                     for alias in node.names:
+                        target = f"{module}.{alias.name}" if module else alias.name
                         edges.append(DependencyEdge(
                             source_id=file_path,
-                            target_id=f"{module}.{alias.name}",
-                            type="import"
+                            target_id=target,
+                            raw_target=target,
+                            type="import",
+                            is_resolved=False
                         ))
             
             # Extract inheritance and calls
@@ -80,7 +85,9 @@ class PythonAdapter(LanguageAdapter):
                             edges.append(DependencyEdge(
                                 source_id=f"{self.current_file}:{node.name}",
                                 target_id=base.id,
-                                type="inheritance"
+                                raw_target=base.id,
+                                type="inheritance",
+                                is_resolved=False
                             ))
                     self.generic_visit(node)
                     self.current_symbol = old_sym
@@ -96,7 +103,9 @@ class PythonAdapter(LanguageAdapter):
                         edges.append(DependencyEdge(
                             source_id=f"{self.current_file}:{self.current_symbol}",
                             target_id=node.func.id,
+                            raw_target=node.func.id,
                             type="call",
+                            is_resolved=False,
                             metadata={"line": str(node.lineno)}
                         ))
                     self.generic_visit(node)
