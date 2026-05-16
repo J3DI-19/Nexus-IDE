@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { X, AlertTriangle } from 'lucide-react';
+import { ClipboardCopy, X, AlertTriangle } from 'lucide-react';
 
 interface ConfirmDialogProps {
   isOpen: boolean;
@@ -7,6 +7,9 @@ interface ConfirmDialogProps {
   description: string;
   confirmText?: string;
   cancelText?: string;
+  hideCancel?: boolean;
+  secondaryText?: string;
+  onSecondaryAction?: () => void;
   onConfirm: () => void;
   onCancel: () => void;
   variant?: 'default' | 'destructive';
@@ -19,6 +22,9 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   description,
   confirmText = 'Confirm',
   cancelText = 'Cancel',
+  hideCancel = false,
+  secondaryText,
+  onSecondaryAction,
   onConfirm,
   onCancel,
   variant = 'default',
@@ -60,13 +66,26 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         </div>
 
         <div className="modal-footer">
-          <button
-            onClick={onCancel}
-            disabled={loading}
-            className="modal-btn modal-btn-cancel"
-          >
-            {cancelText}
-          </button>
+          {onSecondaryAction && secondaryText && (
+            <button
+              onClick={onSecondaryAction}
+              disabled={loading}
+              className="modal-btn modal-btn-secondary"
+              type="button"
+            >
+              <ClipboardCopy size={12} />
+              {secondaryText}
+            </button>
+          )}
+          {!hideCancel && (
+            <button
+              onClick={onCancel}
+              disabled={loading}
+              className="modal-btn modal-btn-cancel"
+            >
+              {cancelText}
+            </button>
+          )}
           <button
             onClick={onConfirm}
             disabled={loading}

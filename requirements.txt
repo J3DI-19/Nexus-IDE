@@ -1,2 +1,6 @@
 fastapi
-uvicorn
+uvicorn[standard]
+websockets
+pywinpty
+ptyprocess
+jinja2

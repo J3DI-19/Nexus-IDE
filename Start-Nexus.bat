@@ -13,7 +13,7 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr :5173') do taskkill /PID %%a 
 REM --- Start Backend ---
 echo Starting Backend (FastAPI)...
 cd backend
-start "Nexus Backend" cmd /k "uvicorn main:app --reload --host 127.0.0.1 --port 8000"
+start "Nexus Backend" cmd /k "python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000"
 
 REM --- Start Frontend ---
 echo Starting Frontend (Vite)...

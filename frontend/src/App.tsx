@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Braces, FileText, Folder, PanelLeft, PanelRight, Play, Search, Terminal, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Braces, FileText, Folder, LoaderCircle, PanelLeft, PanelRight, Play, Search, Terminal, X } from 'lucide-react';
 import Explorer from './components/Explorer';
 import Editor from './components/Editor';
 import RightPanel from './components/RightPanel';
+import TerminalPanel from './components/TerminalPanel';
 import ConfirmDialog from './components/ui/ConfirmDialog';
 import { buildTree, FileNode } from './utils/buildTree';
 
@@ -28,17 +29,6 @@ type WorkspaceSearchMatch =
   | { type: 'file'; file: FileNode }
   | { type: 'symbol'; symbol: WorkspaceSymbol };
 
-type RunResult = {
-  status: string;
-  path: string;
-  language: string;
-  command: string[];
-  cwd: string;
-  stdout: string;
-  stderr: string;
-  exit_code: number;
-};
-
 const App: React.FC = () => {
   const [tree, setTree] = useState<FileNode[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -56,10 +46,16 @@ const App: React.FC = () => {
 
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorDialogOpen, setErrorDialogOpen] = useState<boolean>(false);
+  const [errorDialogTitle, setErrorDialogTitle] = useState<string>('Runtime Error');
+  const [errorDialogHint, setErrorDialogHint] = useState<string>('');
+  const [errorDialogCopyText, setErrorDialogCopyText] = useState<string>('');
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [consoleOpen, setConsoleOpen] = useState<boolean>(false);
-  const [runResult, setRunResult] = useState<RunResult | null>(null);
-  const [runError, setRunError] = useState<string | null>(null);
+  const [terminalSessionId, setTerminalSessionId] = useState<string | null>(null);
+  const [pendingRunPath, setPendingRunPath] = useState<string | null>(null);
+  const [terminalPanelKey, setTerminalPanelKey] = useState<number>(0);
+  const pendingRunPathRef = useRef<string | null>(null);
 
   const [showExplorer, setShowExplorer] = useState(true);
   const [showRightPanel, setShowRightPanel] = useState(true);
@@ -83,11 +79,104 @@ const App: React.FC = () => {
     setConfirmConfig({ ...config, isOpen: true });
   };
 
+  const deriveErrorMeta = (message: string, fallback = 'Runtime Error') => {
+    const text = message.toLowerCase();
+    if (text.includes('c++ compiler')) {
+      return {
+        title: 'C++ Runtime Missing',
+        hint: 'Drop a bundled MinGW / g++ toolchain into backend/runtimes/gcc/ to run C++ files inside Nexus.',
+      };
+    }
+    if (text.includes('c compiler')) {
+      return {
+        title: 'C Runtime Missing',
+        hint: 'Drop a bundled MinGW / gcc toolchain into backend/runtimes/gcc/ to run C files inside Nexus.',
+      };
+    }
+    if (text.includes('python runtime')) {
+      return {
+        title: 'Python Runtime Missing',
+        hint: 'Add a Nexus-packaged Python runtime to backend/runtimes/python/ so Python runs stay local.',
+      };
+    }
+    if (text.includes('node runtime')) {
+      return {
+        title: 'Node.js Runtime Missing',
+        hint: 'Add a Nexus-packaged Node runtime to backend/runtimes/node/ so JS files run without host installs.',
+      };
+    }
+    if (text.includes('typescript support')) {
+      return {
+        title: 'TypeScript Runtime Missing',
+        hint: 'Ship Node plus tsx or ts-node in backend/runtimes/node/node_modules/.bin/ for TypeScript runs.',
+      };
+    }
+    if (text.includes('java runtime')) {
+      return {
+        title: 'Java Runtime Missing',
+        hint: 'Add a bundled Java runtime to backend/runtimes/java/ so Java files run inside Nexus.',
+      };
+    }
+    if (text.includes('c# compiler')) {
+      return {
+        title: 'C# Runtime Missing',
+        hint: 'Add a bundled .NET SDK or C# compiler under backend/runtimes/dotnet/ for C# execution.',
+      };
+    }
+    if (text.includes('bash runtime')) {
+      return {
+        title: 'Shell Runtime Missing',
+        hint: 'Add a bundled Bash runtime to backend/runtimes/bash/ for shell script execution.',
+      };
+    }
+    if (text.includes('powershell runtime')) {
+      return {
+        title: 'PowerShell Runtime Missing',
+        hint: 'Add a bundled PowerShell runtime to backend/runtimes/powershell/ for script execution.',
+      };
+    }
+    if (text.includes('no run configuration')) {
+      return {
+        title: 'Unsupported File Type',
+        hint: 'This file type does not have a run target yet. Add a runtime mapping in Nexus to enable it.',
+      };
+    }
+    return {
+      title: fallback,
+      hint: 'Nexus could not complete the requested action.',
+    };
+  };
+
+  const showErrorDialog = (message: string, title = 'Runtime Error', hint = '', copyText = '') => {
+    setError(message);
+    setErrorDialogTitle(title);
+    setErrorDialogHint(hint);
+    setErrorDialogCopyText(copyText || message);
+    setErrorDialogOpen(true);
+  };
+
+  const closeErrorDialog = () => {
+    setErrorDialogOpen(false);
+    setError(null);
+    setErrorDialogHint('');
+    setErrorDialogCopyText('');
+  };
+
+  const copyErrorDetails = async () => {
+    const payload = [errorDialogTitle, errorDialogHint, errorDialogCopyText].filter(Boolean).join('\n\n');
+    if (!payload) return;
+    await navigator.clipboard.writeText(payload);
+  };
+
   useEffect(() => {
     return () => {
       Object.values(diagnosticsTimers.current).forEach((timer) => window.clearTimeout(timer));
     };
   }, []);
+
+  useEffect(() => {
+    pendingRunPathRef.current = pendingRunPath;
+  }, [pendingRunPath]);
 
   const fetchProject = async () => {
     try {
@@ -98,7 +187,8 @@ const App: React.FC = () => {
       setTree(buildTree(data.files));
       setError(null);
     } catch (err: any) {
-      setError(err.message);
+      const meta = deriveErrorMeta(err.message, 'Workspace Scan Failed');
+      showErrorDialog(err.message, meta.title, meta.hint);
     } finally {
       setLoading(false);
     }
@@ -121,7 +211,8 @@ const App: React.FC = () => {
       await fetchProject();
       await fetchWorkspaceSymbols();
     } catch (err: any) {
-      setError(err.message);
+      const meta = deriveErrorMeta(err.message, 'Open Folder Failed');
+      showErrorDialog(err.message, meta.title, meta.hint);
       setLoading(false);
     }
   };
@@ -139,6 +230,7 @@ const App: React.FC = () => {
     setWorkspaceSearchIndex(0);
     setWorkspaceSymbols([]);
     setError(null);
+    setErrorDialogOpen(false);
   };
 
   const fetchWorkspaceSymbols = async () => {
@@ -173,6 +265,8 @@ const App: React.FC = () => {
       setActiveTabPath(path);
     } catch (err: any) {
       console.error('[IDE] Error:', err);
+      const meta = deriveErrorMeta(err.message, 'File Open Failed');
+      showErrorDialog(err.message, meta.title, meta.hint, `Path: ${path}`);
     }
   };
 
@@ -270,7 +364,8 @@ const App: React.FC = () => {
         });
       });
     } catch (err: any) {
-      setError(err.message);
+      const meta = deriveErrorMeta(err.message, 'Save Failed');
+      showErrorDialog(err.message, meta.title, meta.hint, `Path: ${activeTab.path}`);
     } finally {
       setLoading(false);
     }
@@ -483,30 +578,68 @@ const App: React.FC = () => {
     });
   };
 
+  const sendRunToTerminal = async (sessionId: string, path: string) => {
+    const res = await fetch(`${API_BASE}/terminal/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, path })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || 'Run failed');
+  };
+
+  const handleTerminalSessionReady = useCallback((sessionId: string | null) => {
+    setTerminalSessionId(sessionId);
+    if (!sessionId && pendingRunPathRef.current) {
+      setIsRunning(false);
+    }
+  }, []);
+
+  const handleTerminalKilled = useCallback(() => {
+    setTerminalSessionId(null);
+    setPendingRunPath(null);
+    setIsRunning(false);
+    setConsoleOpen(false);
+    setTerminalPanelKey((key) => key + 1);
+  }, []);
+
+  const shouldRenderTerminal = consoleOpen || Boolean(terminalSessionId) || Boolean(pendingRunPath);
+
+  useEffect(() => {
+    if (!terminalSessionId || !pendingRunPath) return;
+
+    sendRunToTerminal(terminalSessionId, pendingRunPath)
+      .catch((err: any) => {
+        const meta = deriveErrorMeta(err.message, 'Run Failed');
+        showErrorDialog(err.message, meta.title, meta.hint, pendingRunPathRef.current ? `Path: ${pendingRunPathRef.current}` : '');
+      })
+      .finally(() => {
+        setPendingRunPath(null);
+        setIsRunning(false);
+      });
+  }, [terminalSessionId, pendingRunPath]);
+
   const handleRunActiveFile = async () => {
     if (!activeTab || isRunning) return;
 
     try {
       setIsRunning(true);
       setConsoleOpen(true);
-      setRunError(null);
 
       if (activeTab.isDirty) {
         await saveTab(activeTab);
       }
 
-      const res = await fetch(`${API_BASE}/run`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: activeTab.path })
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || 'Run failed');
-      setRunResult(data);
+      if (!terminalSessionId) {
+        setPendingRunPath(activeTab.path);
+        return;
+      }
+
+      await sendRunToTerminal(terminalSessionId, activeTab.path);
     } catch (err: any) {
-      setRunResult(null);
-      setRunError(err.message);
-    } finally {
+      const meta = deriveErrorMeta(err.message, 'Run Failed');
+      showErrorDialog(err.message, meta.title, meta.hint, pendingRunPathRef.current ? `Path: ${pendingRunPathRef.current}` : '');
+      setPendingRunPath(null);
       setIsRunning(false);
     }
   };
@@ -611,6 +744,18 @@ const App: React.FC = () => {
         }}
         onCancel={() => setConfirmConfig(prev => ({ ...prev, isOpen: false }))}
       />
+      <ConfirmDialog
+        isOpen={errorDialogOpen}
+        title={errorDialogTitle}
+        description={[errorDialogHint, error].filter(Boolean).join('\n\n') || 'Something went wrong.'}
+        confirmText="OK"
+        hideCancel
+        secondaryText="Copy Details"
+        onSecondaryAction={copyErrorDetails}
+        variant="destructive"
+        onConfirm={closeErrorDialog}
+        onCancel={closeErrorDialog}
+      />
       {/* ===== LEFT PANEL ===== */}
       {showExplorer && (
         <div className="sidebar flex flex-col h-full active-context">
@@ -671,8 +816,6 @@ const App: React.FC = () => {
 
             {loading ? (
               <div className="p-16 text-[10px] opacity-50 italic text-center">Scanning...</div>
-            ) : error ? (
-              <div className="p-16 text-[10px] text-red-400 text-center">Error: {error}</div>
             ) : !isProjectLoaded ? (
               <div className="explorer-empty">
                 <div className="empty-icon">
@@ -834,19 +977,19 @@ const App: React.FC = () => {
           {/* RIGHT */}
           <div className="header-right">
             <button
-              className="run-button"
+              className={`run-button ${isRunning ? 'running' : ''}`}
               onClick={handleRunActiveFile}
               disabled={!activeTab || isRunning}
               title={activeTab ? `Run ${activeTab.path.split('/').pop()}` : 'Open a file to run'}
               type="button"
             >
-              <Play size={13} fill="currentColor" />
+              {isRunning ? <LoaderCircle size={13} className="run-spinner" /> : <Play size={13} fill="currentColor" />}
               <span>{isRunning ? 'Running' : 'Run'}</span>
             </button>
             <button
-              className={`btn-icon ${consoleOpen ? 'active' : ''}`}
+              className={`terminal-toggle ${consoleOpen ? 'active' : ''} ${terminalSessionId ? 'connected' : ''}`}
               onClick={() => setConsoleOpen(open => !open)}
-              title="Toggle console"
+              title={consoleOpen ? 'Terminal visible' : 'Show terminal'}
               type="button"
             >
               <Terminal size={16} />
@@ -868,54 +1011,15 @@ const App: React.FC = () => {
             onCloseTab={handleCloseTab}
             onContentChange={handleTabContentChange}
           />
-          {consoleOpen && (
-            <div className="run-console">
-              <div className="run-console-header">
-                <div className="run-console-title">
-                  <Terminal size={14} />
-                  <span>Console</span>
-                </div>
-                <div className="run-console-meta">
-                  {runResult && (
-                    <>
-                      <span>{runResult.language}</span>
-                      <span className={runResult.exit_code === 0 ? 'success' : 'error'}>
-                        exit {runResult.exit_code}
-                      </span>
-                    </>
-                  )}
-                  {isRunning && <span>running...</span>}
-                  <button
-                    className="run-console-close"
-                    onClick={() => setConsoleOpen(false)}
-                    title="Close console"
-                    type="button"
-                  >
-                    <X size={13} />
-                  </button>
-                </div>
-              </div>
-              <div className="run-console-body">
-                {runResult ? (
-                  <>
-                    <div className="run-console-command">
-                      {`> ${runResult.command.join(' ')}`}
-                    </div>
-                    {runResult.stdout && <pre>{runResult.stdout}</pre>}
-                    {runResult.stderr && <pre className="stderr">{runResult.stderr}</pre>}
-                    {!runResult.stdout && !runResult.stderr && (
-                      <div className="run-console-empty">Process completed with no output.</div>
-                    )}
-                  </>
-                ) : runError ? (
-                  <pre className="stderr">{runError}</pre>
-                ) : (
-                  <div className="run-console-empty">
-                    Run the active file to see output here.
-                  </div>
-                )}
-              </div>
-            </div>
+          {shouldRenderTerminal && (
+            <TerminalPanel
+              key={terminalPanelKey}
+              sessionId={terminalSessionId}
+              visible={consoleOpen}
+              onSessionReady={handleTerminalSessionReady}
+              onSessionKilled={handleTerminalKilled}
+              onClose={() => setConsoleOpen(false)}
+            />
           )}
         </div>
       </div>
@@ -944,6 +1048,7 @@ const App: React.FC = () => {
             activeTab={activeTab} 
             isProjectLoaded={isProjectLoaded} 
             onFileSelect={handleFileSelect}
+            workspaceFiles={searchableFiles.map((file) => ({ path: file.path, name: file.name }))}
           />
         </div>
       )}

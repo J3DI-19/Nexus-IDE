@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from api import scan, file, prompt, run
+from api import scan, file, prompt, terminal, settings
 from utils.security import set_project_root
 from pydantic import BaseModel
 
@@ -38,7 +38,8 @@ def update_root(request: SetRootRequest):
 app.include_router(scan.router)
 app.include_router(file.router)
 app.include_router(prompt.router)
-app.include_router(run.router)
+app.include_router(terminal.router)
+app.include_router(settings.router)
 
 if __name__ == "__main__":
     import uvicorn

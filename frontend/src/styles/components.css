@@ -77,12 +77,16 @@
 .modal-content {
   width: 100%;
   max-width: 400px;
-  background-color: #1e1e1e;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    radial-gradient(circle at top, rgba(162, 119, 255, 0.12), transparent 42%),
+    linear-gradient(180deg, #1d1e22 0%, #16171a 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 12px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  box-shadow:
+    0 25px 50px -12px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.02) inset;
   overflow: hidden;
-  animation: modal-appear 0.2s ease-out;
+  animation: modal-appear 0.22s cubic-bezier(0.175, 0.885, 0.32, 1.15);
 }
 
 @keyframes modal-appear {
@@ -97,7 +101,7 @@
 }
 
 .modal-body {
-  padding: 20px;
+  padding: 22px 22px 18px;
 }
 
 .modal-flex {
@@ -112,6 +116,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
 }
 
 .modal-icon-box.destructive {
@@ -130,15 +135,16 @@
 }
 
 .modal-title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: #ffffff;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  letter-spacing: 0.01em;
 }
 
 .modal-description {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(255, 255, 255, 0.72);
   line-height: 1.5;
 }
 
@@ -147,9 +153,10 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px;
-  background-color: rgba(255, 255, 255, 0.02);
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 14px 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01));
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .modal-btn {
@@ -160,6 +167,21 @@
   cursor: pointer;
   border: none;
   transition: all 0.2s ease;
+}
+
+.modal-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.modal-btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-color: rgba(162, 119, 255, 0.22);
 }
 
 .modal-btn-cancel {
@@ -189,8 +211,8 @@
 }
 
 .modal-btn-confirm.destructive {
-  background: #ff5050;
-  opacity: 0.9;
+  background: linear-gradient(135deg, #ff6d6d, #ff3f5e);
+  opacity: 0.95;
 }
 
 .modal-btn-confirm.destructive:hover {

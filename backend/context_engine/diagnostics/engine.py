@@ -1,54 +1,115 @@
-from typing import List, Optional
-import subprocess
+from __future__ import annotations
+
+import ast
+import json
 import os
+import re
 from pathlib import Path
+from typing import Callable, Dict, List
+
 from ..runtime.models import RuntimeArtifact, RuntimeArtifactType, StackTraceFrame
+from core.runtime_registry import runtime_registry
+
 
 class BaseChecker:
     def check(self, file_path: str, content: str) -> List[RuntimeArtifact]:
         return []
 
+
+def _artifact(message: str, file_path: str, line_number: int, language: str, kind: str = "syntax") -> RuntimeArtifact:
+    return RuntimeArtifact(
+        artifact_type=RuntimeArtifactType.COMPILER_ERROR,
+        message=message,
+        frames=[StackTraceFrame(file_path=file_path, line_number=line_number, symbol_name="Syntax")],
+        raw_log=message,
+        metadata={"lang": language, "type": kind, "source": "live_diagnostics"},
+    )
+
+
 class PythonChecker(BaseChecker):
     def check(self, file_path: str, content: str) -> List[RuntimeArtifact]:
-        artifacts = []
-        # Use python -m py_compile to check syntax
-        # We need to write to a temp file or use a pipe if possible, 
-        # but py_compile usually wants a file.
-        # For simplicity, we'll check the saved file on disk since this is triggered post-save.
         try:
-            # We don't actually need to compile, just check for SyntaxError
-            # compile(content, file_path, 'exec') is faster and doesn't need disk
-            compile(content, file_path, 'exec')
-        except SyntaxError as e:
-            frames = [StackTraceFrame(
-                file_path=file_path,
-                line_number=e.lineno or 0,
-                symbol_name="Syntax"
-            )]
-            artifacts.append(RuntimeArtifact(
-                artifact_type=RuntimeArtifactType.COMPILER_ERROR,
-                message=f"SyntaxError: {e.msg}",
-                frames=frames,
-                raw_log=str(e),
-                metadata={"lang": "python", "type": "syntax"}
-            ))
-        except Exception as e:
-            pass
-            
-        return artifacts
+            ast.parse(content, filename=file_path)
+            return []
+        except SyntaxError as err:
+            return [_artifact(f"SyntaxError: {err.msg}", file_path, err.lineno or 0, "python")]
+
+
+class JsonChecker(BaseChecker):
+    def check(self, file_path: str, content: str) -> List[RuntimeArtifact]:
+        try:
+            json.loads(content)
+            return []
+        except json.JSONDecodeError as err:
+            return [_artifact(f"JSONError: {err.msg}", file_path, err.lineno or 0, "json")]
+
+
+class BraceBalanceChecker(BaseChecker):
+    def __init__(self, language: str, brace_pairs: Dict[str, str]):
+        self.language = language
+        self.brace_pairs = brace_pairs
+
+    def check(self, file_path: str, content: str) -> List[RuntimeArtifact]:
+        stack: List[tuple[str, int]] = []
+        line = 1
+        for char in content:
+            if char == "\n":
+                line += 1
+                continue
+            if char in self.brace_pairs:
+                stack.append((char, line))
+            elif char in self.brace_pairs.values():
+                if not stack:
+                    return [_artifact(f"Unmatched closing '{char}'", file_path, line, self.language)]
+                opener, opener_line = stack.pop()
+                if self.brace_pairs[opener] != char:
+                    return [_artifact(f"Mismatched '{opener}' opened on line {opener_line}", file_path, line, self.language)]
+        if stack:
+            opener, opener_line = stack[-1]
+            return [_artifact(f"Unclosed '{opener}' started on line {opener_line}", file_path, opener_line, self.language)]
+        return []
+
 
 class JavaScriptChecker(BaseChecker):
     def check(self, file_path: str, content: str) -> List[RuntimeArtifact]:
-        # Simple node syntax check if available
-        return []
+        return BraceBalanceChecker("javascript", {"{": "}", "[": "]", "(": ")"}).check(file_path, content)
+
+
+class TypeScriptChecker(JavaScriptChecker):
+    def check(self, file_path: str, content: str) -> List[RuntimeArtifact]:
+        return super().check(file_path, content)
+
+
+class JavaChecker(BaseChecker):
+    def check(self, file_path: str, content: str) -> List[RuntimeArtifact]:
+        return BraceBalanceChecker("java", {"{": "}", "[": "]", "(": ")"}).check(file_path, content)
+
+
+class CppChecker(BaseChecker):
+    def check(self, file_path: str, content: str) -> List[RuntimeArtifact]:
+        return BraceBalanceChecker("cpp", {"{": "}", "[": "]", "(": ")"}).check(file_path, content)
+
+
+class CSharpChecker(BaseChecker):
+    def check(self, file_path: str, content: str) -> List[RuntimeArtifact]:
+        return BraceBalanceChecker("csharp", {"{": "}", "[": "]", "(": ")"}).check(file_path, content)
+
 
 class DiagnosticsEngine:
     def __init__(self):
-        self.checkers = {
+        self.checkers: Dict[str, BaseChecker] = {
             ".py": PythonChecker(),
+            ".json": JsonChecker(),
             ".js": JavaScriptChecker(),
             ".jsx": JavaScriptChecker(),
-            # Add more as needed
+            ".ts": TypeScriptChecker(),
+            ".tsx": TypeScriptChecker(),
+            ".java": JavaChecker(),
+            ".c": CppChecker(),
+            ".cc": CppChecker(),
+            ".cpp": CppChecker(),
+            ".cxx": CppChecker(),
+            ".cs": CSharpChecker(),
         }
 
     def run_diagnostics(self, file_path: str, content: str) -> List[RuntimeArtifact]:

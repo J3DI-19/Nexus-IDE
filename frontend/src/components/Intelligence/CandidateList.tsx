@@ -119,14 +119,7 @@ const RelationshipPath: React.FC<{ path: string[]; breakdown?: ScoreBreakdown[];
   if (!path || path.length === 0) return null;
 
   const pathType = getPathType(breakdown);
-  const isDependencyHeader = pathType === 'Reverse dependency' || pathType === 'Direct dependency';
-  const displayPath = expanded
-    ? path
-    : isDependencyHeader
-      ? [pathType]
-      : path.map((node) => (node.includes(':') ? node.split(':').pop() || node : node.split('/').pop() || node));
-
-  if (!expanded && isDependencyHeader) {
+  if (!expanded) {
     return (
       <div className="relationship-path compact-dependency" title={path.join(' -> ')}>
         <div className="relationship-path-label">
@@ -138,18 +131,18 @@ const RelationshipPath: React.FC<{ path: string[]; breakdown?: ScoreBreakdown[];
   }
 
   return (
-    <div className={expanded ? 'relationship-path expanded' : 'relationship-path'}>
+    <div className="relationship-path expanded">
       <div className="relationship-path-label">
         <Route size={10} />
         <span>{pathType}</span>
       </div>
       <div className="relationship-path-chain">
-        {displayPath.map((node, i) => (
+        {path.map((node, i) => (
           <React.Fragment key={`${node}-${i}`}>
-            <span className={`chain-node ${i === displayPath.length - 1 ? 'active' : ''}`} title={expanded ? path[i] : path.join(' -> ')}>
-              {node}
+            <span className={`chain-node ${i === path.length - 1 ? 'active' : ''}`} title={path[i]}>
+              {node.includes(':') ? node.split(':').pop() || node : node.split('/').pop() || node}
             </span>
-            {i < displayPath.length - 1 && <ChevronRight size={8} className="opacity-30" />}
+            {i < path.length - 1 && <ChevronRight size={8} className="opacity-30" />}
           </React.Fragment>
         ))}
       </div>
@@ -326,13 +319,6 @@ const CandidateList: React.FC<CandidateListProps> = ({
                   </div>
 
                   <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-4 truncate pr-4">
-                      <div className="candidate-path" title={path}>{path}</div>
-                      {cand.relationship_path?.length > 1 && (
-                        <RelationshipPath path={cand.relationship_path} breakdown={cand.score_breakdown} />
-                      )}
-                    </div>
-
                     {isFileSelected && (
                       <div className="shrink-0 flex justify-end">
                         <span className={`candidate-selection-badge ${isFullFile ? 'purple' : isEmpty ? 'red' : 'blue'}`}>
@@ -367,6 +353,10 @@ const CandidateList: React.FC<CandidateListProps> = ({
                       <RelationshipPath path={cand.relationship_path} breakdown={cand.score_breakdown} expanded />
                     </div>
                   )}
+
+                  <div className="file-detail-path">
+                    <div className="candidate-path" title={path}>{path}</div>
+                  </div>
 
                   {isEmpty && (
                     <div className="empty-slices-warning">

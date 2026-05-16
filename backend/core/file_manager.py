@@ -14,7 +14,7 @@ def get_file_content(path: str) -> str:
         if not resolved_path.is_file():
             raise HTTPException(status_code=404, detail="File not found or is a directory.")
 
-        with open(resolved_path, "r", encoding="utf-8", errors="ignore") as f:
+        with open(resolved_path, "r", encoding="utf-8", errors="ignore", newline="") as f:
             content = f.read()
             
         return content
@@ -31,7 +31,7 @@ def save_file_content(path: str, content: str) -> None:
         resolved_path = is_safe_path(get_project_root() / path)
         if not resolved_path.parent.exists():
             resolved_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(resolved_path, "w", encoding="utf-8") as f:
+        with open(resolved_path, "w", encoding="utf-8", newline="") as f:
             f.write(content)
     except HTTPException:
         raise
