@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, AlertOctagon, Sparkles } from 'lucide-react';
+import { AlertOctagon, Sparkles } from 'lucide-react';
 
 interface GlobalIntelligenceProps {
   runtimeCount: number;

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Braces, FileText, Folder, PanelLeft, PanelRight, Search, Settings, X } from 'lucide-react';
+import { Braces, FileText, Folder, PanelLeft, PanelRight, Play, Search, Terminal, X } from 'lucide-react';
 import Explorer from './components/Explorer';
 import Editor from './components/Editor';
 import RightPanel from './components/RightPanel';
@@ -28,6 +28,17 @@ type WorkspaceSearchMatch =
   | { type: 'file'; file: FileNode }
   | { type: 'symbol'; symbol: WorkspaceSymbol };
 
+type RunResult = {
+  status: string;
+  path: string;
+  language: string;
+  command: string[];
+  cwd: string;
+  stdout: string;
+  stderr: string;
+  exit_code: number;
+};
+
 const App: React.FC = () => {
   const [tree, setTree] = useState<FileNode[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -40,9 +51,15 @@ const App: React.FC = () => {
   const [workspaceSearchIndex, setWorkspaceSearchIndex] = useState<number>(0);
   const workspaceSearchResultRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [workspaceSymbols, setWorkspaceSymbols] = useState<WorkspaceSymbol[]>([]);
+  const diagnosticsTimers = useRef<Record<string, number>>({});
+  const diagnosticsSeq = useRef<Record<string, number>>({});
 
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [isRunning, setIsRunning] = useState<boolean>(false);
+  const [consoleOpen, setConsoleOpen] = useState<boolean>(false);
+  const [runResult, setRunResult] = useState<RunResult | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const [showExplorer, setShowExplorer] = useState(true);
   const [showRightPanel, setShowRightPanel] = useState(true);
@@ -65,6 +82,12 @@ const App: React.FC = () => {
   const confirm = (config: Omit<typeof confirmConfig, 'isOpen'>) => {
     setConfirmConfig({ ...config, isOpen: true });
   };
+
+  useEffect(() => {
+    return () => {
+      Object.values(diagnosticsTimers.current).forEach((timer) => window.clearTimeout(timer));
+    };
+  }, []);
 
   const fetchProject = async () => {
     try {
@@ -104,6 +127,9 @@ const App: React.FC = () => {
   };
 
   const handleCloseFolder = () => {
+    Object.values(diagnosticsTimers.current).forEach((timer) => window.clearTimeout(timer));
+    diagnosticsTimers.current = {};
+    diagnosticsSeq.current = {};
     setIsProjectLoaded(false);
     setTree([]);
     setTabs([]);
@@ -191,6 +217,35 @@ const App: React.FC = () => {
         return tab;
       });
     });
+
+    scheduleLiveDiagnostics(path, newContent);
+  };
+
+  const scheduleLiveDiagnostics = (path: string, content: string) => {
+    if (diagnosticsTimers.current[path]) {
+      window.clearTimeout(diagnosticsTimers.current[path]);
+    }
+
+    const seq = (diagnosticsSeq.current[path] || 0) + 1;
+    diagnosticsSeq.current[path] = seq;
+    const version = Date.now() + seq;
+
+    diagnosticsTimers.current[path] = window.setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/file/diagnostics`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, content, version })
+        });
+
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.applied || diagnosticsSeq.current[path] !== seq) return;
+        window.dispatchEvent(new CustomEvent('nexus-runtime-updated', { detail: { path } }));
+      } catch (err) {
+        console.error('[Diagnostics] Live diagnostics failed', err);
+      }
+    }, 450);
   };
 
   const handleSaveFile = async () => {
@@ -203,6 +258,7 @@ const App: React.FC = () => {
         body: JSON.stringify({ path: activeTab.path, content: activeTab.content })
       });
       if (!res.ok) throw new Error("Failed to save");
+      window.dispatchEvent(new CustomEvent('nexus-runtime-updated', { detail: { path: activeTab.path } }));
       
       setTabs(prev => {
         if (!Array.isArray(prev)) return [];
@@ -407,6 +463,53 @@ const App: React.FC = () => {
     if (!Array.isArray(tabs)) return null;
     return tabs.find(t => t.path === activeTabPath) || null;
   }, [tabs, activeTabPath]);
+
+  const saveTab = async (tab: Tab) => {
+    const res = await fetch(`${API_BASE}/file/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: tab.path, content: tab.content })
+    });
+    if (!res.ok) throw new Error("Failed to save");
+    window.dispatchEvent(new CustomEvent('nexus-runtime-updated', { detail: { path: tab.path } }));
+
+    setTabs(prev => {
+      if (!Array.isArray(prev)) return [];
+      return prev.map(item =>
+        item.path === tab.path
+          ? { ...item, savedContent: tab.content, isDirty: false }
+          : item
+      );
+    });
+  };
+
+  const handleRunActiveFile = async () => {
+    if (!activeTab || isRunning) return;
+
+    try {
+      setIsRunning(true);
+      setConsoleOpen(true);
+      setRunError(null);
+
+      if (activeTab.isDirty) {
+        await saveTab(activeTab);
+      }
+
+      const res = await fetch(`${API_BASE}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: activeTab.path })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Run failed');
+      setRunResult(data);
+    } catch (err: any) {
+      setRunResult(null);
+      setRunError(err.message);
+    } finally {
+      setIsRunning(false);
+    }
+  };
 
   const dirtyPaths = useMemo(() => {
     if (!Array.isArray(tabs)) return new Set<string>();
@@ -730,6 +833,24 @@ const App: React.FC = () => {
 
           {/* RIGHT */}
           <div className="header-right">
+            <button
+              className="run-button"
+              onClick={handleRunActiveFile}
+              disabled={!activeTab || isRunning}
+              title={activeTab ? `Run ${activeTab.path.split('/').pop()}` : 'Open a file to run'}
+              type="button"
+            >
+              <Play size={13} fill="currentColor" />
+              <span>{isRunning ? 'Running' : 'Run'}</span>
+            </button>
+            <button
+              className={`btn-icon ${consoleOpen ? 'active' : ''}`}
+              onClick={() => setConsoleOpen(open => !open)}
+              title="Toggle console"
+              type="button"
+            >
+              <Terminal size={16} />
+            </button>
             {!showRightPanel && (
               <div className="btn-icon" onClick={() => setShowRightPanel(true)}>
                 <PanelRight size={16} />
@@ -739,7 +860,7 @@ const App: React.FC = () => {
         </div>
 
         {/* ===== EDITOR ===== */}
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden editor-workbench">
           <Editor
             activeTab={activeTab}
             tabs={tabs}
@@ -747,6 +868,55 @@ const App: React.FC = () => {
             onCloseTab={handleCloseTab}
             onContentChange={handleTabContentChange}
           />
+          {consoleOpen && (
+            <div className="run-console">
+              <div className="run-console-header">
+                <div className="run-console-title">
+                  <Terminal size={14} />
+                  <span>Console</span>
+                </div>
+                <div className="run-console-meta">
+                  {runResult && (
+                    <>
+                      <span>{runResult.language}</span>
+                      <span className={runResult.exit_code === 0 ? 'success' : 'error'}>
+                        exit {runResult.exit_code}
+                      </span>
+                    </>
+                  )}
+                  {isRunning && <span>running...</span>}
+                  <button
+                    className="run-console-close"
+                    onClick={() => setConsoleOpen(false)}
+                    title="Close console"
+                    type="button"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              </div>
+              <div className="run-console-body">
+                {runResult ? (
+                  <>
+                    <div className="run-console-command">
+                      {`> ${runResult.command.join(' ')}`}
+                    </div>
+                    {runResult.stdout && <pre>{runResult.stdout}</pre>}
+                    {runResult.stderr && <pre className="stderr">{runResult.stderr}</pre>}
+                    {!runResult.stdout && !runResult.stderr && (
+                      <div className="run-console-empty">Process completed with no output.</div>
+                    )}
+                  </>
+                ) : runError ? (
+                  <pre className="stderr">{runError}</pre>
+                ) : (
+                  <div className="run-console-empty">
+                    Run the active file to see output here.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

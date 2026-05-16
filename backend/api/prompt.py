@@ -21,11 +21,13 @@ class PromptRequest(BaseModel):
     file: str
     goal: str
     include_slices: bool = False
+    mode: Optional[str] = "feature"
 
 class AssembleRequest(BaseModel):
     task: str
     active_file: str
     selected_files: List[str]
+    selected_candidates: Optional[List[ContextCandidate]] = None
     selected_slices: Optional[Dict[str, List[int]]] = None # File path -> List of slice indices
     full_file_overrides: Optional[List[str]] = None # List of file paths to include entirely
     mode: Optional[str] = "feature"
@@ -42,6 +44,26 @@ def _ensure_context_ready():
             status_code=409,
             detail="Context engine is not initialized. Open a project folder first."
         )
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, round(len(text) / 4)) if text else 0
+
+def _build_prompt_stats(prompt: str, context) -> Dict[str, int]:
+    files = []
+    if context.active_file:
+        files.append(context.active_file)
+    files.extend(context.related_files)
+
+    context_lines = 0
+    for file in files:
+        for slice_item in file.slices:
+            context_lines += len(slice_item.content.splitlines())
+
+    return {
+        "files": len(files),
+        "context_lines": context_lines,
+        "prompt_tokens": _estimate_tokens(prompt)
+    }
 
 @router.get("/context/status")
 async def get_context_status():
@@ -164,11 +186,15 @@ async def retrieve_context(request: PromptRequest):
         query = RetrievalQuery(
             task=request.goal,
             active_file=request.file,
-            mode="feature",
+            mode=request.mode or "feature",
             include_slices=request.include_slices
         )
         candidates = pipeline.retrieve(query)
-        return {"candidates": [c.dict() for c in candidates]}
+        return {
+            "candidates": [c.dict() for c in candidates],
+            "score_units": "points",
+            "auto_select_threshold": 40
+        }
     except Exception as e:
         print(f"RETRIEVAL ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -182,23 +208,38 @@ async def assemble_context(request: AssembleRequest):
         _ensure_context_ready()
         query = RetrievalQuery(
             task=request.task,
-            active_file=request.active_file
+            active_file=request.active_file,
+            mode=request.mode or "feature"
         )
         mode = PromptMode(request.mode) if request.mode else PromptMode.FEATURE
         
         candidates = []
+        candidate_map = {
+            cand.file_metadata.rel_path: cand
+            for cand in (request.selected_candidates or [])
+        }
         for rel_path in request.selected_files:
+            if rel_path in candidate_map:
+                candidates.append(candidate_map[rel_path])
+                continue
+
             metadata = pipeline.index.get_file_metadata(rel_path)
-            if metadata:
-                artifacts = pipeline.index.get_artifacts_for_file(rel_path)
-                symbols = pipeline.index.get_symbols_for_file(rel_path)
-                candidates.append(ContextCandidate(
-                    file_metadata=metadata,
-                    score=100.0,
-                    score_breakdown=[ScoreComponent(factor="User Selection", points=100.0, reason="Manually selected")],
-                    matched_symbols=[s.name for s in symbols],
-                    matched_artifacts=[a.artifact_type for a in artifacts]
-                ))
+            if not metadata:
+                continue
+
+            artifacts = pipeline.index.get_artifacts_for_file(rel_path)
+            symbols = pipeline.index.get_symbols_for_file(rel_path)
+            candidates.append(ContextCandidate(
+                file_metadata=metadata,
+                score=0.0,
+                score_breakdown=[ScoreComponent(
+                    factor="Manual Selection",
+                    points=0.0,
+                    reason="Selected manually outside the current retrieval result set"
+                )],
+                matched_symbols=[s.name for s in symbols],
+                matched_artifacts=[a.artifact_type for a in artifacts]
+            ))
         
         context = pipeline.extraction.extract_context(
             query.active_file, 
@@ -232,7 +273,7 @@ async def assemble_context(request: AssembleRequest):
             
         runtime_artifacts = pipeline.runtime.get_active_artifacts()
         prompt = pipeline.prompt_builder.build_prompt(query, context, impact=impact_result, mode=mode, runtime_artifacts=runtime_artifacts)
-        return {"prompt": prompt}
+        return {"prompt": prompt, "stats": _build_prompt_stats(prompt, context)}
     except Exception as e:
         print(f"ASSEMBLY ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
-import { ChevronDown, ChevronRight, ShieldCheck, Zap, CheckCircle2, Circle, AlertCircle } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Circle, Route, Zap } from 'lucide-react';
 
 interface ScoreBreakdown {
   factor: string;
   points: number;
   reason: string;
+  path?: string[];
 }
 
 interface CodeSlice {
@@ -47,126 +48,218 @@ interface CandidateListProps {
   mode?: string;
 }
 
-const ExplainabilityHierarchy: React.FC<{ breakdown: ScoreBreakdown[] }> = ({ breakdown }) => {
-  if (!breakdown || !Array.isArray(breakdown)) return null;
+const AUTO_SELECT_THRESHOLD = 40;
 
-  // Sort by points descending and take top 3
-  const topReasons = [...breakdown]
-    .sort((a, b) => b.points - a.points)
-    .slice(0, 3);
+const formatPoints = (points: number) => `${points > 0 ? '+' : ''}${Math.round(points)} pts`;
 
-  return (
-    <div className="explainability-hierarchy mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-      {topReasons.map((reason, i) => (
-        <div
-          key={i}
-          className="flex items-center gap-1 rounded-md border border-white/5 bg-white/[0.03] px-1.5 py-0.5 text-[8px]"
-        >
-          <span className={`font-mono font-bold ${reason.points > 0 ? 'text-green-400/80' : 'text-red-400/80'}`}>
-            {reason.points > 0 ? '+' : ''}{Math.round(reason.points)}
-          </span>
-
-          <span className="opacity-50 truncate max-w-[140px]">
-            {reason.reason}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
+const getPathType = (breakdown: ScoreBreakdown[] = []) => {
+  const pathFactor = breakdown.find((item) => item.path?.length)?.factor.toLowerCase() || '';
+  if (pathFactor.includes('runtime') || pathFactor.includes('execution')) return 'Runtime chain';
+  if (pathFactor.includes('call')) return 'Call chain';
+  if (pathFactor.includes('reverse')) return 'Reverse dependency';
+  if (pathFactor.includes('dependency') || pathFactor.includes('import')) return 'Direct dependency';
+  return 'Relationship path';
 };
 
-const SliceCard: React.FC<{ 
-  path: string;
-  index: number;
-  slice: CodeSlice;
-  isSelected: boolean;
-  isAuto: boolean;
-  onToggle: () => void;
-}> = ({ path, index, slice, isSelected, isAuto, onToggle }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  
-  // Selection States
-  const isManuallySelected = isSelected && !isAuto;
-  const isManuallyExcluded = !isSelected && isAuto;
-  const isUnselected = !isSelected && !isAuto;
-  const isOptional = isUnselected;
+const ScoreBreakdownPanel: React.FC<{ breakdown: ScoreBreakdown[]; score: number; mode?: string }> = ({
+  breakdown,
+  score,
+  mode
+}) => {
+  const groups = useMemo(() => {
+    const sorted = [...(breakdown || [])].sort((a, b) => b.points - a.points);
+    return {
+      primary: sorted.filter((item) => item.points >= 35),
+      supporting: sorted.filter((item) => item.points >= 0 && item.points < 35),
+      penalties: sorted.filter((item) => item.points < 0)
+    };
+  }, [breakdown]);
 
-  const cardClass = `
-  slice-card
-  ${slice.expansion_type || 'proximity'}
-  ${isManuallySelected ? 'manually-selected' : ''}
-  ${isManuallyExcluded ? 'manually-excluded' : ''}
-  ${isOptional ? 'unselected optional-slice' : ''}
-  `;
-  const badgeClass = `slice-badge badge-${slice.expansion_type || 'proximity'}`;
-  
-  return (
-    <div
-      className={cardClass}
-      style={{
-        transform: isSelected ? 'translateY(0px)' : 'translateY(1px)'
-      }}
-    >
-      <div className="slice-card-header">
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <button 
-            className={`opacity-40 hover:opacity-100 transition-opacity ${isSelected ? 'text-blue-400' : ''} ${isManuallySelected ? 'text-purple-400' : ''}`}
-            onClick={(e) => { e.stopPropagation(); onToggle(); }}
-          >
-            {isSelected ? <CheckCircle2 size={14} className={isManuallySelected ? "drop-shadow-[0_0_5px_rgba(162,119,255,0.8)]" : ""} /> : <Circle size={14} />}
-          </button>
-          
-          <div className="slice-anchor-symbol truncate">
-            {slice.anchor_symbol || 'logic_fragment'}()
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          <span className={badgeClass}>{slice.expansion_type}</span>
-          <span className="text-[9px] opacity-40 font-mono">L{slice.start_line}</span>
+  const renderGroup = (label: string, items: ScoreBreakdown[]) => {
+    if (!items.length) return null;
+
+    return (
+      <div className="score-breakdown-group">
+        <div className="score-breakdown-group-title">{label}</div>
+        <div className="score-breakdown-items">
+          {items.map((item, index) => (
+            <div className={`score-breakdown-row ${item.points < 0 ? 'penalty' : ''}`} key={`${item.factor}-${index}`}>
+              <span className="score-breakdown-points">{formatPoints(item.points)}</span>
+              <div className="score-breakdown-copy">
+                <span className="score-breakdown-factor">{item.factor}</span>
+                <span className="score-breakdown-reason">{item.reason}</span>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
-      
-      <div className="slice-code-container" onClick={() => setIsExpanded(!isExpanded)}>
-        <pre className={`slice-code-preview ${isExpanded ? 'expanded' : ''}`}>
-          <code>{slice.content}</code>
-        </pre>
-        {!isExpanded && (
-          <div className="absolute bottom-1 right-2 text-[8px] opacity-40 bg-black/80 px-1.5 py-0.5 rounded border border-white/5">
-            View Code
-          </div>
-        )}
-      </div>
-      
-      <div className="px-3 py-1.5 flex items-center justify-between border-t border-white/5 bg-white/[0.01]">
-        <span className="text-[8px] opacity-30 italic truncate pr-4">Reason: {slice.reason}</span>
-        {isManuallySelected && <span className="text-[8px] text-purple-300 font-bold uppercase tracking-tighter">Human Overridden</span>}
-      </div>
-    </div>
-  );
-};
+    );
+  };
 
-export const ConnectionChain: React.FC<{ path: string[] }> = ({ path }) => {
-  if (!path || path.length === 0) return null;
-  
   return (
-    <div className="connection-chain ml-4">
-      <div className="connection-flow-box">
-        <span className="text-[8px] uppercase tracking-[0.12em] opacity-30 mr-1.5">
-          Flow
+    <div className="score-breakdown-panel">
+      <div className="score-breakdown-summary">
+        <span className="score-breakdown-total">{Math.round(score)} pts</span>
+        <span className="score-breakdown-threshold">
+          Auto-selects at {AUTO_SELECT_THRESHOLD}+ pts in {mode || 'feature'} mode
         </span>
-        {path.map((node, i) => (
-          <React.Fragment key={i}>
-            <span className={`chain-node ${i === path.length - 1 ? 'active' : ''}`}>
-              {node.includes(':') ? node.split(':').pop() : node.split('/').pop()}
+      </div>
+      {renderGroup('Primary Signals', groups.primary)}
+      {renderGroup('Supporting Signals', groups.supporting)}
+      {renderGroup('Penalties', groups.penalties)}
+    </div>
+  );
+};
+
+const RelationshipPath: React.FC<{ path: string[]; breakdown?: ScoreBreakdown[]; expanded?: boolean }> = ({
+  path,
+  breakdown = [],
+  expanded = false
+}) => {
+  if (!path || path.length === 0) return null;
+
+  const pathType = getPathType(breakdown);
+  const isDependencyHeader = pathType === 'Reverse dependency' || pathType === 'Direct dependency';
+  const displayPath = expanded
+    ? path
+    : isDependencyHeader
+      ? [pathType]
+      : path.map((node) => (node.includes(':') ? node.split(':').pop() || node : node.split('/').pop() || node));
+
+  if (!expanded && isDependencyHeader) {
+    return (
+      <div className="relationship-path compact-dependency" title={path.join(' -> ')}>
+        <div className="relationship-path-label">
+          <Route size={10} />
+          <span>{pathType}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={expanded ? 'relationship-path expanded' : 'relationship-path'}>
+      <div className="relationship-path-label">
+        <Route size={10} />
+        <span>{pathType}</span>
+      </div>
+      <div className="relationship-path-chain">
+        {displayPath.map((node, i) => (
+          <React.Fragment key={`${node}-${i}`}>
+            <span className={`chain-node ${i === displayPath.length - 1 ? 'active' : ''}`} title={expanded ? path[i] : path.join(' -> ')}>
+              {node}
             </span>
-            {i < path.length - 1 && <ChevronRight size={8} className="opacity-20" />}
+            {i < displayPath.length - 1 && <ChevronRight size={8} className="opacity-30" />}
           </React.Fragment>
         ))}
       </div>
     </div>
   );
 };
+
+export const ConnectionChain: React.FC<{ path: string[] }> = ({ path }) => (
+  <RelationshipPath path={path} />
+);
+
+const SliceCard: React.FC<{
+  slice: CodeSlice;
+  isSelected: boolean;
+  isAuto: boolean;
+  onToggle: () => void;
+}> = ({ slice, isSelected, isAuto, onToggle }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const isManuallySelected = isSelected && !isAuto;
+  const isManuallyExcluded = !isSelected && isAuto;
+  const isUnselected = !isSelected && !isAuto;
+  const cardClass = [
+    'slice-card',
+    slice.expansion_type || 'proximity',
+    isManuallySelected ? 'manually-selected' : '',
+    isManuallyExcluded ? 'manually-excluded' : '',
+    isUnselected ? 'unselected optional-slice' : ''
+  ].filter(Boolean).join(' ');
+  const badgeClass = `slice-badge badge-${slice.expansion_type || 'proximity'}`;
+  const selectionLabel = isManuallySelected
+    ? 'Manually selected'
+    : isManuallyExcluded
+      ? 'Auto suggestion removed'
+      : isAuto
+        ? 'Auto selected'
+        : 'Optional';
+
+  return (
+    <div className={cardClass} style={{ transform: isSelected ? 'translateY(0px)' : 'translateY(1px)' }}>
+      <div className="slice-card-header">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <button
+            className={`slice-toggle ${isSelected ? 'selected' : ''} ${isManuallySelected ? 'manual' : ''}`}
+            onClick={(e) => { e.stopPropagation(); onToggle(); }}
+            type="button"
+            title={selectionLabel}
+          >
+            {isSelected ? <CheckCircle2 size={14} /> : <Circle size={14} />}
+          </button>
+
+          <div className="slice-anchor-symbol truncate">
+            {slice.anchor_symbol || 'logic_fragment'}()
+          </div>
+        </div>
+
+        <div className="slice-card-meta">
+          <span className={badgeClass}>{slice.expansion_type || 'proximity'}</span>
+          <span className="slice-line-range">L{slice.start_line}-L{slice.end_line}</span>
+        </div>
+      </div>
+
+      <div className="slice-code-container" onClick={() => setIsExpanded(!isExpanded)}>
+        <pre className={`slice-code-preview ${isExpanded ? 'expanded' : ''}`}>
+          <code>{slice.content}</code>
+        </pre>
+        {!isExpanded && (
+          <div className="slice-view-code">
+            View Code
+          </div>
+        )}
+      </div>
+
+      <div className="slice-reason-row">
+        <span className="slice-reason">Reason: {slice.reason}</span>
+        <span className={`slice-selection-state ${isManuallySelected ? 'manual' : isManuallyExcluded ? 'excluded' : ''}`}>
+          {selectionLabel}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+const FileSelectionControls: React.FC<{
+  path: string;
+  isFullFile: boolean;
+  allSlicesSelected: boolean;
+  loading: boolean;
+  selectAllSlices: (path: string) => void;
+  toggleFullFile: (path: string) => void;
+}> = ({ path, isFullFile, allSlicesSelected, loading, selectAllSlices, toggleFullFile }) => (
+  <div className="file-selection-controls">
+    <button
+      className={`full-file-toggle ${allSlicesSelected ? 'active' : ''}`}
+      onClick={(e) => { e.stopPropagation(); selectAllSlices(path); }}
+      disabled={loading}
+      type="button"
+    >
+      Include All Fragments
+    </button>
+    <button
+      className={`full-file-toggle ${isFullFile ? 'active' : ''}`}
+      onClick={(e) => { e.stopPropagation(); toggleFullFile(path); }}
+      disabled={loading}
+      type="button"
+    >
+      {isFullFile ? 'Full File Enabled' : 'Include Full File'}
+    </button>
+  </div>
+);
 
 const CandidateList: React.FC<CandidateListProps> = ({
   candidates,
@@ -180,7 +273,8 @@ const CandidateList: React.FC<CandidateListProps> = ({
   selectAllSlices,
   expandedCand,
   setExpandedCand,
-  loading
+  loading,
+  mode
 }) => {
   return (
     <div className="candidate-list-root">
@@ -190,56 +284,59 @@ const CandidateList: React.FC<CandidateListProps> = ({
           const isFileSelected = selectedPaths.has(path);
           const isFullFile = fullFileOverrides.has(path);
           const activeSlicesCount = sliceSelection[path]?.size || 0;
+          const totalSlices = cand.slices?.length || 0;
+          const allSlicesSelected = totalSlices > 0 && activeSlicesCount === totalSlices;
           const isExpanded = expandedCand === path;
           const isEmpty = isFileSelected && activeSlicesCount === 0 && !isFullFile;
+          const autoSelected = cand.score >= AUTO_SELECT_THRESHOLD;
 
           return (
             <div
-              key={path} 
+              key={path}
               className={`file-bubble ${isFileSelected ? 'selected' : ''} ${isFullFile ? 'full-file-override' : ''} ${isEmpty ? 'is-empty' : ''}`}
             >
-              <div 
+              <div
                 className="file-bubble-header"
                 onClick={() => setExpandedCand(isExpanded ? null : path)}
               >
                 <button
-                  className={`candidate-toggle ${isFileSelected ? 'selected' : ''}`}
+                  className={`candidate-toggle ${isFileSelected ? 'selected' : ''} ${isFullFile ? 'full-file' : ''}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     toggleSelection(path);
                   }}
                   type="button"
+                  title={isFileSelected ? 'Remove file from prompt' : 'Select auto-passing slices for this file'}
                 >
-                  {isFileSelected ? <CheckCircle2 size={14} className="text-blue-400" /> : <Circle size={14} className="opacity-30" />}
+                  {isFileSelected ? <CheckCircle2 size={14} /> : <Circle size={14} className="opacity-30" />}
                 </button>
-                
+
                 <div className="file-bubble-meta">
-                  {/* Primary Row: Identity (Left) and Score (Right) */}
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <span className="candidate-name">{path.split('/').pop()}</span>
+                  <div className="flex items-center justify-between mb-1 gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="candidate-name truncate">{path.split('/').pop()}</span>
                       <span className="candidate-badge accent">{cand.file_metadata.classification}</span>
+                      {autoSelected && <span className="candidate-badge auto">Auto threshold</span>}
                     </div>
-                    <div className="flex items-center gap-1.5 min-w-[50px] justify-end">
+                    <div className="flex items-center gap-1.5 min-w-[64px] justify-end">
                       <span className="candidate-score-badge">
-                        {Math.round(cand.score)}%
+                        {Math.round(cand.score)} pts
                       </span>
                     </div>
                   </div>
 
-                  {/* Secondary Row: Context (Left) and Status (Right) */}
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-4 truncate pr-4">
-                      <div className="candidate-path">{path}</div>
+                      <div className="candidate-path" title={path}>{path}</div>
                       {cand.relationship_path?.length > 1 && (
-                        <ConnectionChain path={cand.relationship_path} />
+                        <RelationshipPath path={cand.relationship_path} breakdown={cand.score_breakdown} />
                       )}
                     </div>
-                    
+
                     {isFileSelected && (
                       <div className="shrink-0 flex justify-end">
                         <span className={`candidate-selection-badge ${isFullFile ? 'purple' : isEmpty ? 'red' : 'blue'}`}>
-                          {isFullFile ? 'FULL OVERRIDE' : `${activeSlicesCount} SLICE${activeSlicesCount !== 1 ? 'S' : ''}`}
+                          {isFullFile ? 'FULL FILE' : `${activeSlicesCount} SLICE${activeSlicesCount !== 1 ? 'S' : ''}`}
                         </span>
                       </div>
                     )}
@@ -253,30 +350,28 @@ const CandidateList: React.FC<CandidateListProps> = ({
 
               {isExpanded && (
                 <div className="file-bubble-details animate-in slide-in-from-top-1 duration-200 pb-2">
-                  <div className="px-3 flex items-center justify-between mb-2 gap-2">
-                    <div className="flex-1">
-                      <ExplainabilityHierarchy breakdown={cand.score_breakdown} />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button 
-                        className={`full-file-toggle ${activeSlicesCount === cand.slices?.length ? 'active' : ''}`}
-                        onClick={(e) => { e.stopPropagation(); selectAllSlices(path); }}
-                      >
-                        Include All Fragments
-                      </button>
-                      <button 
-                        className={`full-file-toggle ${isFullFile ? 'active' : ''}`}
-                        onClick={(e) => { e.stopPropagation(); toggleFullFile(path); }}
-                      >
-                        {isFullFile ? 'Full File Enabled' : 'Include Full File'}
-                      </button>
-                    </div>
+                  <div className="file-detail-toolbar">
+                    <ScoreBreakdownPanel breakdown={cand.score_breakdown} score={cand.score} mode={mode} />
+                    <FileSelectionControls
+                      path={path}
+                      isFullFile={isFullFile}
+                      allSlicesSelected={allSlicesSelected}
+                      loading={loading}
+                      selectAllSlices={selectAllSlices}
+                      toggleFullFile={toggleFullFile}
+                    />
                   </div>
-                  
+
+                  {cand.relationship_path?.length > 1 && (
+                    <div className="file-detail-path">
+                      <RelationshipPath path={cand.relationship_path} breakdown={cand.score_breakdown} expanded />
+                    </div>
+                  )}
+
                   {isEmpty && (
                     <div className="empty-slices-warning">
                       <AlertCircle size={10} />
-                      <span>Warning: No surgical slices selected.</span>
+                      <span>No slices selected. Pick fragments or explicitly include the full file.</span>
                     </div>
                   )}
 
@@ -284,14 +379,12 @@ const CandidateList: React.FC<CandidateListProps> = ({
                     {isFullFile ? (
                       <div className="full-file-indicator">
                         <Zap size={10} className="text-purple-400" />
-                        <span>Architectural pruning bypassed. Full context injected.</span>
+                        <span>Full file explicitly selected. Slice pruning is bypassed for this file.</span>
                       </div>
-                    ) : cand.slices && cand.slices.length > 0 ? (
-                      cand.slices.map((slice, i) => (
-                        <SliceCard 
-                          key={i} 
-                          path={path}
-                          index={i}
+                    ) : totalSlices > 0 ? (
+                      cand.slices?.map((slice, i) => (
+                        <SliceCard
+                          key={`${slice.start_line}-${slice.end_line}-${i}`}
                           slice={slice}
                           isSelected={sliceSelection[path]?.has(i) || false}
                           isAuto={autoSliceSelection[path]?.has(i) || false}
@@ -299,8 +392,8 @@ const CandidateList: React.FC<CandidateListProps> = ({
                         />
                       ))
                     ) : (
-                      <div className="text-[10px] opacity-30 italic py-4 text-center">
-                        No semantic slices available.
+                      <div className="text-[10px] opacity-50 italic py-4 text-center">
+                        No semantic slices available. Use full file if this candidate is needed.
                       </div>
                     )}
                   </div>

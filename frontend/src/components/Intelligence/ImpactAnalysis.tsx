@@ -1,6 +1,5 @@
 import React from 'react';
-import { FileCode, ChevronRight } from 'lucide-react';
-import { ConnectionChain } from './CandidateList';
+import { ChevronRight, GitBranch, Route, Sigma } from 'lucide-react';
 
 interface ImpactCandidate {
   file_metadata: {
@@ -21,13 +20,18 @@ interface ImpactAnalysisProps {
   onJumpToFile?: (path: string, line?: number) => void;
 }
 
+const formatImpactNode = (node: string) => {
+  if (node.includes(':')) return node.split(':').pop() || node;
+  return node.split(/[\\/]/).pop() || node;
+};
+
 const ImpactAnalysis: React.FC<ImpactAnalysisProps> = ({ impactCandidates, loading, onJumpToFile }) => {
   if (loading) {
     return (
       <div className="py-16 flex flex-col items-center justify-center gap-4 bg-yellow-400/[0.02] border border-dashed border-yellow-400/20 rounded-xl animate-pulse">
         <div className="relative">
           <div className="absolute inset-0 bg-yellow-400/20 blur-xl rounded-full"></div>
-          <FileCode size={32} className="text-yellow-400 relative z-10" />
+          <GitBranch size={32} className="text-yellow-400 relative z-10" />
         </div>
         <div className="flex flex-col items-center gap-1">
           <div className="text-[10px] uppercase font-black text-yellow-200 tracking-widest">Architectural Radar Active</div>
@@ -40,7 +44,7 @@ const ImpactAnalysis: React.FC<ImpactAnalysisProps> = ({ impactCandidates, loadi
   if (impactCandidates.length === 0) {
     return (
       <div className="py-12 flex flex-col items-center justify-center opacity-30 gap-3 border border-dashed border-white/5 rounded-xl bg-white/[0.01]">
-        <FileCode size={24} className="opacity-20" />
+        <GitBranch size={24} className="opacity-20" />
         <div className="text-[10px] text-center italic">
           No significant downstream architectural impact detected.
         </div>
@@ -54,11 +58,16 @@ const ImpactAnalysis: React.FC<ImpactAnalysisProps> = ({ impactCandidates, loadi
         {impactCandidates.map((cand, idx) => {
           const relPath = cand.file_metadata.rel_path;
           const fileName = relPath.split('/').pop();
+          const affectedCount = cand.affected_symbols?.length || 0;
+          const topRelationship = cand.relationship_types?.[0]?.replace('_', ' ') || 'graph edge';
 
-          const handleDoubleClick = (e: React.MouseEvent) => {
+          const handleDoubleClick = () => {
             if (onJumpToFile) {
-              const path = relPath;
-              // Default back to line 1 as part of the stability rollback
+              let path = relPath.replace(/\\/g, '/');
+              ['/workspace/', 'workspace/', './'].forEach(delim => {
+                if (path.includes(delim)) path = path.split(delim).pop() || path;
+              });
+              if (path.startsWith('/')) path = path.substring(1);
               const line = 1;
 
               onJumpToFile(path);
@@ -80,47 +89,66 @@ const ImpactAnalysis: React.FC<ImpactAnalysisProps> = ({ impactCandidates, loadi
               title="Double-click to navigate to file"
             >
               <div className="file-bubble-header cursor-pointer">
-                {/* Visual Icon */}
-                <div className="candidate-toggle selected pointer-events-none" style={{ borderColor: 'rgba(255, 202, 58, 0.3)', background: 'rgba(255, 202, 58, 0.1)', color: 'var(--color-dependency)' }}>
-                  <FileCode size={14} />
+                <div className="impact-file-icon">
+                  <GitBranch size={14} />
                 </div>
 
                 <div className="file-bubble-meta">
-                  {/* Row 1: Identity & Depth */}
-                  <div className="flex items-start justify-between mb-1.5">
-                    <div className="flex items-center gap-2">
+                  <div className="impact-bubble-topline">
+                    <div className="impact-file-identity">
                       <span className="candidate-name">{fileName}</span>
                       <span className="candidate-badge accent">{cand.file_metadata.classification}</span>
+                      <span className="impact-relation-pill">
+                        <Route size={9} />
+                        {topRelationship}
+                      </span>
                     </div>
-                    <div className="flex flex-col items-end gap-2 shrink-0">
-                      <div className="impact-depth-badge">
-                        DEPTH {cand.traversal_depth}
+                    <div className="impact-metric-stack">
+                      <div className="impact-score-badge">
+                        <Sigma size={10} />
+                        {Math.round(cand.impact_score)} pts
                       </div>
-                      
-                      {cand.affected_symbols && cand.affected_symbols.length > 0 && (
-                        <div className="flex flex-wrap gap-1 justify-end max-w-[180px]">
-                          {cand.affected_symbols.slice(0, 5).map((sym, i) => (
-                            <div key={i} className="impact-symbol-pill">
-                              {sym}()
-                            </div>
-                          ))}
-                          {cand.affected_symbols.length > 5 && (
-                            <div className="text-[8px] bg-yellow-400/10 text-yellow-200/60 border border-yellow-400/10 px-1.5 py-0.5 rounded-md font-black">
-                              +{cand.affected_symbols.length - 5}
-                            </div>
-                          )}
-                        </div>
-                      )}
+                      <div className="impact-depth-badge">D{cand.traversal_depth}</div>
                     </div>
                   </div>
 
-                  {/* Row 2: Context & Trace */}
-                  <div className="flex items-center gap-2">
-                    <div className="candidate-path">{relPath}</div>
-                    {cand.relationship_path?.length > 1 && (
-                      <ConnectionChain path={cand.relationship_path} />
-                    )}
+                  <div className="impact-bubble-context">
+                    <div className="candidate-path" title={relPath}>{relPath}</div>
                   </div>
+
+                  {cand.relationship_path?.length > 1 && (
+                    <div className="impact-relationship-path">
+                      <div className="impact-relationship-label">
+                        <Route size={10} />
+                        <span>Impact path</span>
+                      </div>
+                      <div className="impact-relationship-chain">
+                        {cand.relationship_path.map((node, i) => (
+                          <React.Fragment key={`${node}-${i}`}>
+                            <span className={`impact-chain-node ${i === cand.relationship_path.length - 1 ? 'active' : ''}`} title={node}>
+                              {formatImpactNode(node)}
+                            </span>
+                            {i < cand.relationship_path.length - 1 && <ChevronRight size={9} className="impact-chain-arrow" />}
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {affectedCount > 0 && (
+                    <div className="impact-symbol-strip">
+                      {cand.affected_symbols.slice(0, 5).map((sym, i) => (
+                        <div key={i} className="impact-symbol-pill">
+                          {sym}()
+                        </div>
+                      ))}
+                      {affectedCount > 5 && (
+                        <div className="impact-symbol-more">
+                          +{affectedCount - 5}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

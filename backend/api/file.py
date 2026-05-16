@@ -9,6 +9,11 @@ class SaveFileRequest(BaseModel):
     path: str
     content: str
 
+class DiagnosticsRequest(BaseModel):
+    path: str
+    content: str
+    version: int = 0
+
 class CreatePathRequest(BaseModel):
     path: str
 
@@ -31,6 +36,11 @@ async def read_file(path: str = Query(..., description="Relative path to file"))
 
 from context_engine.core.pipeline import pipeline
 
+def _run_live_diagnostics(path: str, content: str, version: int = 0):
+    diagnostics = pipeline.diagnostics.run_diagnostics(path, content)
+    applied = pipeline.runtime.replace_diagnostics_for_file(path, diagnostics, version=version)
+    return diagnostics, applied
+
 @router.post("/file/save")
 async def save_file(req: SaveFileRequest):
     """Saves content to a file."""
@@ -38,16 +48,26 @@ async def save_file(req: SaveFileRequest):
     
     # 2. Trigger Background Diagnostics (Linter-like behavior)
     try:
-        diagnostics = pipeline.diagnostics.run_diagnostics(req.path, req.content)
-        for artifact in diagnostics:
-            # Feed syntax errors into the runtime sink so the UI updates immediately
-            pipeline.runtime._current_artifacts.insert(0, artifact)
-            # Cap the buffer
-            pipeline.runtime._current_artifacts = pipeline.runtime._current_artifacts[:10]
+        _run_live_diagnostics(req.path, req.content)
     except Exception as e:
         print(f"[Diagnostics] Failed for {req.path}: {e}")
 
     return {"status": "success", "message": "File saved and diagnostics completed."}
+
+@router.post("/file/diagnostics")
+async def run_live_file_diagnostics(req: DiagnosticsRequest):
+    """Runs diagnostics against the unsaved editor buffer and updates runtime artifacts."""
+    try:
+        diagnostics, applied = _run_live_diagnostics(req.path, req.content, version=req.version)
+        return {
+            "status": "success",
+            "applied": applied,
+            "version": req.version,
+            "diagnostics": [artifact.dict() for artifact in diagnostics]
+        }
+    except Exception as e:
+        print(f"[Diagnostics] Failed for {req.path}: {e}")
+        return {"status": "error", "diagnostics": [], "message": str(e)}
 
 @router.post("/file/create")
 async def create_file(req: CreatePathRequest):

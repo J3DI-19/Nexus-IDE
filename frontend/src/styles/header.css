@@ -37,6 +37,32 @@
   gap: 6px;
 }
 
+.run-button {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(93, 196, 126, 0.35);
+  border-radius: 6px;
+  background: rgba(93, 196, 126, 0.12);
+  color: #9ee6b0;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 10px;
+  transition: all 0.15s ease;
+}
+
+.run-button:hover:not(:disabled) {
+  background: rgba(93, 196, 126, 0.18);
+  border-color: rgba(93, 196, 126, 0.55);
+}
+
+.run-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .header-search-wrap {
   position: relative;
   margin-left: 20px;

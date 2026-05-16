@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sparkles, Wand2, X } from 'lucide-react';
+import { Wand2, X } from 'lucide-react';
 
 interface TaskInputProps {
   goal: string;
@@ -27,8 +27,7 @@ const TaskInput: React.FC<TaskInputProps> = ({
   onClear,
   candidates,
   prompt,
-  impactCandidates,
-  hasRuntime = false
+  impactCandidates
 }) => {
   const hasTaskState = Boolean(
     goal.trim() ||

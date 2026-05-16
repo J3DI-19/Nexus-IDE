@@ -28,6 +28,12 @@ interface ContextStatus {
   frameworks: string[];
 }
 
+interface PromptStats {
+  files: number;
+  context_lines: number;
+  prompt_tokens: number;
+}
+
 const getLanguage = (path: string | null) => {
   if (!path) return 'None';
   const ext = path.split('.').pop()?.toLowerCase();
@@ -64,6 +70,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
   const [expandedCand, setExpandedCand] = useState<string | null>(null);
   const [retrievalOpen, setRetrievalOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
+  const [promptStats, setPromptStats] = useState<PromptStats | null>(null);
   const [promptOpen, setPromptOpen] = useState(false);
   const [showCopied, setShowCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +87,8 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
   const [impactLoading, setImpactLoading] = useState(false);
 
   const runtimeFetchInFlight = useRef(false);
+  const runtimeFetchQueued = useRef(false);
+  const diagnosticsVersionRef = useRef(0);
 
   const fetchContextStatus = useCallback(async () => {
     try {
@@ -96,7 +105,10 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
   }, []);
 
   const fetchRuntime = useCallback(async () => {
-    if (runtimeFetchInFlight.current) return;
+    if (runtimeFetchInFlight.current) {
+      runtimeFetchQueued.current = true;
+      return;
+    }
     runtimeFetchInFlight.current = true;
     try {
       const res = await fetch(`${API_BASE}/context/runtime`);
@@ -110,8 +122,35 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
       console.error('Runtime fetch failed', err);
     } finally {
       runtimeFetchInFlight.current = false;
+      if (runtimeFetchQueued.current) {
+        runtimeFetchQueued.current = false;
+        void fetchRuntime();
+      }
     }
   }, []);
+
+  const flushActiveFileDiagnostics = useCallback(async () => {
+    if (!activeTab) return;
+
+    diagnosticsVersionRef.current += 1;
+    try {
+      const res = await fetch(`${API_BASE}/file/diagnostics`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: activeTab.path,
+          content: activeTab.content || '',
+          version: Date.now() + diagnosticsVersionRef.current
+        })
+      });
+
+      if (res.ok) {
+        window.dispatchEvent(new CustomEvent('nexus-runtime-updated', { detail: { path: activeTab.path } }));
+      }
+    } catch (err) {
+      console.error('Active file diagnostics flush failed', err);
+    }
+  }, [activeTab]);
 
   const resetWorkflowState = useCallback(() => {
     setGoal('');
@@ -123,8 +162,11 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     setHotSymbols([]);
     setSelectedPaths(new Set());
     setFullFileOverrides(new Set());
+    setSliceSelection({});
+    setAutoSliceSelection({});
     setExpandedCand(null);
     setPrompt('');
+    setPromptStats(null);
     setRetrievalOpen(false);
     setPromptOpen(false);
     setError(null);
@@ -148,7 +190,15 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
       fetchRuntime();
     }, 5000);
 
-    return () => clearInterval(runtimeInterval);
+    const handleRuntimeUpdated = () => {
+      fetchRuntime();
+    };
+    window.addEventListener('nexus-runtime-updated', handleRuntimeUpdated);
+
+    return () => {
+      clearInterval(runtimeInterval);
+      window.removeEventListener('nexus-runtime-updated', handleRuntimeUpdated);
+    };
   }, [fetchContextStatus, fetchRuntime, isProjectLoaded, resetWorkflowState]);
 
   const initializeContext = async () => {
@@ -224,6 +274,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     setAutoSliceSelection({});
     setExpandedCand(null);
     setPrompt('');
+    setPromptStats(null);
     setPromptOpen(false);
   }, []);
 
@@ -239,6 +290,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     clearRetrievalState();
 
     try {
+      await flushActiveFileDiagnostics();
       await fetchRuntime();
       const res = await fetch(`${API_BASE}/context/retrieve`, {
         method: 'POST',
@@ -246,6 +298,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
         body: JSON.stringify({ 
           file: activeTab.path, 
           goal,
+          mode,
           include_slices: true
         })
       });
@@ -299,6 +352,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
           task: goal,
           active_file: activeTab?.path,
           selected_files: Array.from(selectedPaths),
+          selected_candidates: candidates.filter((candidate) => selectedPaths.has(candidate.file_metadata.rel_path)),
           selected_slices: Object.fromEntries(
             Object.entries(sliceSelection).map(([k, v]) => [k, Array.from(v)])
           ),
@@ -309,6 +363,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
       if (!res.ok) throw new Error(`Assembly failed: ${res.status}`);
       const data = await res.json();
       setPrompt(data.prompt);
+      setPromptStats(data.stats || null);
       setRetrievalOpen(false);
       setPromptOpen(true);
     } catch (err: any) {
@@ -361,10 +416,25 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
   const selectAllSlices = (path: string) => {
     const cand = candidates.find(c => c.file_metadata.rel_path === path);
     if (!cand || !cand.slices) return;
+    const allIndices = cand.slices.map((_: any, i: number) => i);
+    const current = sliceSelection[path] || new Set<number>();
+    const allSelected = allIndices.length > 0 && current.size === allIndices.length;
+
+    if (allSelected) {
+      setSliceSelection(prev => ({ ...prev, [path]: new Set<number>() }));
+      if (!fullFileOverrides.has(path)) {
+        setSelectedPaths(currentPaths => {
+          const nextPaths = new Set(currentPaths);
+          nextPaths.delete(path);
+          return nextPaths;
+        });
+      }
+      return;
+    }
     
     setSliceSelection(prev => ({
       ...prev,
-      [path]: new Set(cand.slices.map((_: any, i: number) => i))
+      [path]: new Set(allIndices)
     }));
     
     if (!selectedPaths.has(path)) {
@@ -533,8 +603,11 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                   setImpactCandidates([]);
                   setSelectedPaths(new Set());
                   setFullFileOverrides(new Set());
+                  setSliceSelection({});
+                  setAutoSliceSelection({});
                   setExpandedCand(null);
                   setPrompt('');
+                  setPromptStats(null);
                   setRetrievalOpen(false);
                   setPromptOpen(false);
                   setError(null);
@@ -676,8 +749,6 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                   <span className="intel-header-file-pill">
                     {mode.toUpperCase()}
                   </span>
-                  <div className="intel-subtitle-divider"></div>
-                  <span>{selectedPaths.size} Files Injected</span>
                 </div>
               </div>
               <button className="intel-modal-close" onClick={() => setPromptOpen(false)} type="button">
@@ -688,6 +759,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
             <div className="intel-modal-body custom-scrollbar">
               <PromptPreview 
                 prompt={prompt}
+                stats={promptStats}
                 onCopy={handleCopyPrompt}
                 onBack={() => {
                   setPromptOpen(false);

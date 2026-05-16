@@ -1,6 +1,5 @@
 import React from 'react';
-import { Zap, AlertOctagon, ChevronRight, FileCode } from 'lucide-react';
-import { ConnectionChain } from './CandidateList';
+import { Zap, AlertOctagon } from 'lucide-react';
 
 interface StackTraceFrame {
   file_path: string;
@@ -23,7 +22,7 @@ interface RuntimeDiagnosticsProps {
   onJumpToFile?: (path: string, line: number) => void;
 }
 
-const RuntimeDiagnostics: React.FC<RuntimeDiagnosticsProps> = ({ artifacts, executionChains, hotSymbols, onClear, onJumpToFile }) => {
+const RuntimeDiagnostics: React.FC<RuntimeDiagnosticsProps> = ({ artifacts, hotSymbols, onClear, onJumpToFile }) => {
   if (!artifacts || artifacts.length === 0) {
     return (
       <div className="py-12 flex flex-col items-center justify-center opacity-30 gap-3 border border-dashed border-white/5 rounded-xl bg-white/[0.01]">
@@ -67,7 +66,7 @@ const RuntimeDiagnostics: React.FC<RuntimeDiagnosticsProps> = ({ artifacts, exec
         {artifacts.map((art, idx) => {
           const primaryFrame = art.frames && art.frames.length > 0 ? art.frames[0] : null;
 
-          const handleDoubleClick = (e: React.MouseEvent) => {
+          const handleDoubleClick = () => {
             if (primaryFrame && onJumpToFile) {
               // 1. Normalize Path for the jump
               let path = primaryFrame.file_path.replace(/\\/g, '/');
@@ -77,7 +76,7 @@ const RuntimeDiagnostics: React.FC<RuntimeDiagnosticsProps> = ({ artifacts, exec
               if (path.startsWith('/')) path = path.substring(1);
 
               // 2. Trigger the "File Select" logic normally (opens tab)
-              onJumpToFile(path);
+              onJumpToFile(path, primaryFrame.line_number);
 
               // 3. Broadcast Global Event for the Editor to handle the jump/focus
               // We do this after a small delay to ensure the tab has started changing

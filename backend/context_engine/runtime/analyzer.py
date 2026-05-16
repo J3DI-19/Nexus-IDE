@@ -1,11 +1,12 @@
 from typing import List, Optional
-from .models import RuntimeArtifact
+from .models import RuntimeArtifact, RuntimeArtifactType
 from .detectors import RuntimeDetector
 
 class RuntimeAnalyzer:
     def __init__(self):
         self.detector = RuntimeDetector()
         self._current_artifacts: List[RuntimeArtifact] = []
+        self._diagnostic_versions = {}
 
     def ingest_log(self, log: str):
         artifact = self.detector.detect_and_parse(log)
@@ -20,6 +21,55 @@ class RuntimeAnalyzer:
 
     def clear(self):
         self._current_artifacts = []
+
+    def replace_diagnostics_for_file(self, file_path: str, diagnostics: List[RuntimeArtifact], version: int = 0) -> bool:
+        normalized = self._normalize_path(file_path)
+        current_version = self._diagnostic_versions.get(normalized, -1)
+        if version < current_version:
+            return False
+        self._diagnostic_versions[normalized] = version
+
+        def is_same_file_diagnostic(artifact: RuntimeArtifact) -> bool:
+            is_diagnostic = (
+                artifact.metadata.get("source") == "live_diagnostics"
+                or artifact.artifact_type in {
+                    RuntimeArtifactType.COMPILER_ERROR,
+                    RuntimeArtifactType.BUILD_FAILURE,
+                    RuntimeArtifactType.TEST_FAILURE,
+                }
+                or artifact.metadata.get("type") in {"syntax", "diagnostic"}
+            )
+            if not is_diagnostic:
+                return False
+            return any(self._is_same_path(frame.file_path, normalized) for frame in artifact.frames)
+
+        self._current_artifacts = [
+            artifact for artifact in self._current_artifacts
+            if not is_same_file_diagnostic(artifact)
+        ]
+
+        for artifact in reversed(diagnostics):
+            artifact.metadata["source"] = "live_diagnostics"
+            self._current_artifacts.insert(0, artifact)
+
+        self._current_artifacts = self._current_artifacts[:10]
+        return True
+
+    def _normalize_path(self, file_path: str) -> str:
+        normalized = file_path.replace("\\", "/").strip()
+        for prefix in ("/workspace/", "workspace/", "./"):
+            if prefix in normalized:
+                normalized = normalized.split(prefix).pop() or normalized
+        return normalized.lstrip("/")
+
+    def _is_same_path(self, artifact_path: str, target_path: str) -> bool:
+        normalized_artifact = self._normalize_path(artifact_path)
+        normalized_target = self._normalize_path(target_path)
+        return (
+            normalized_artifact == normalized_target
+            or normalized_artifact.endswith("/" + normalized_target)
+            or normalized_target.endswith("/" + normalized_artifact)
+        )
         
     def get_referenced_files(self) -> List[str]:
         files = set()
