@@ -35,6 +35,13 @@ workspace/
 tmp/
 .gradle/
 
+# Local runtime artifacts (do not commit)
+backend/runtimes/
+backend/.nexus-runner/
+backend/.nexus-cs-runner/
+backend/runtime_audit/
+backend/backend/
+
 # Editor
 .vscode/*
 !.vscode/extensions.json
