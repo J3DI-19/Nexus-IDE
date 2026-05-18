@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict
+import json
+from pathlib import Path
 from utils.security import get_project_root, is_safe_path
 from context_engine.core.scanner import fast_recursive_scan
 from context_engine.core.pipeline import pipeline
@@ -31,6 +33,7 @@ class AssembleRequest(BaseModel):
     selected_slices: Optional[Dict[str, List[int]]] = None # File path -> List of slice indices
     full_file_overrides: Optional[List[str]] = None # List of file paths to include entirely
     mode: Optional[str] = "feature"
+    selected_preset_id: Optional[str] = None
 
 class ImpactRequest(BaseModel):
     active_file: str
@@ -64,6 +67,28 @@ def _build_prompt_stats(prompt: str, context) -> Dict[str, int]:
         "context_lines": context_lines,
         "prompt_tokens": _estimate_tokens(prompt)
     }
+
+
+def _load_prompt_preset(selected_preset_id: Optional[str]) -> Dict[str, str]:
+    settings_path = get_project_root() / "backend" / "config" / "prompt_settings.json"
+    if not settings_path.exists():
+        return {}
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        presets = data.get("presets", [])
+        target_id = selected_preset_id or data.get("selected_preset_id")
+        if not target_id:
+            return {}
+        preset = next((p for p in presets if p.get("id") == target_id), None)
+        if not preset:
+            return {}
+        return {
+            "id": str(preset.get("id", "")),
+            "name": str(preset.get("name", "")),
+            "template": str(preset.get("template", "")),
+        }
+    except Exception:
+        return {}
 
 @router.get("/context/status")
 async def get_context_status():
@@ -272,7 +297,16 @@ async def assemble_context(request: AssembleRequest):
             impact_result = pipeline.impact.analyze(impact_query)
             
         runtime_artifacts = pipeline.runtime.get_active_artifacts()
-        prompt = pipeline.prompt_builder.build_prompt(query, context, impact=impact_result, mode=mode, runtime_artifacts=runtime_artifacts)
+        selected_preset = _load_prompt_preset(request.selected_preset_id)
+        prompt = pipeline.prompt_builder.build_prompt(
+            query,
+            context,
+            impact=impact_result,
+            mode=mode,
+            runtime_artifacts=runtime_artifacts,
+            preset_name=selected_preset.get("name"),
+            preset_template=selected_preset.get("template"),
+        )
         return {"prompt": prompt, "stats": _build_prompt_stats(prompt, context)}
     except Exception as e:
         print(f"ASSEMBLY ERROR: {e}")

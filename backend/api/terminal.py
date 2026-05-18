@@ -46,9 +46,13 @@ async def terminal_input(req: TerminalInputRequest):
 
 @router.post("/terminal/run")
 async def terminal_run(req: TerminalRunRequest):
-    command = build_run_command(req.path)
-    terminal_manager.get(req.session_id).run(command)
-    return {"status": "success", "command": command}
+    run_spec = build_run_command(req.path)
+    terminal_manager.get(req.session_id).run(run_spec["command"])
+    return {
+        "status": "success",
+        "command": run_spec["command"],
+        "provenance": run_spec["provenance"],
+    }
 
 
 @router.post("/terminal/interrupt")

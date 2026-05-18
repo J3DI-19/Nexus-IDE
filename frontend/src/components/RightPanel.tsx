@@ -39,7 +39,14 @@ interface PromptPreset {
   id: string;
   name: string;
   description: string;
+  template?: string;
   isDefault?: boolean;
+}
+interface PromptSettingsResponse {
+  selected_preset_id: string;
+  manual_file_add_enabled?: boolean;
+  allow_preset_change_in_preview?: boolean;
+  presets: PromptPreset[];
 }
 
 interface RuntimeSettings {
@@ -52,6 +59,42 @@ interface RuntimeSettings {
   bash: string;
   powershell: string;
 }
+interface RuntimeDiagnosticsMap {
+  [key: string]: {
+    configured: string | null;
+    resolved: string | null;
+    source: 'configured' | 'bundled' | 'system' | 'missing';
+  };
+}
+
+const scoreManualMatch = (query: string, file: { path: string; name: string }) => {
+  const q = query.trim().toLowerCase();
+  if (!q) return -1;
+  const name = file.name.toLowerCase();
+  const path = file.path.toLowerCase();
+  if (name === q) return 1000;
+  if (name.startsWith(q)) return 800;
+  if (name.includes(q)) return 650;
+  if (path.includes(q)) return 400;
+  return -1;
+};
+
+const highlightMatch = (text: string, query: string) => {
+  const q = query.trim();
+  if (!q) return text;
+  const source = text.toLowerCase();
+  const needle = q.toLowerCase();
+  const start = source.indexOf(needle);
+  if (start < 0) return text;
+  const end = start + needle.length;
+  return (
+    <>
+      {text.slice(0, start)}
+      <mark className="manual-add-highlight">{text.slice(start, end)}</mark>
+      {text.slice(end)}
+    </>
+  );
+};
 
 const getLanguage = (path: string | null) => {
   if (!path) return 'None';
@@ -104,8 +147,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
   // Impact State
   const [impactCandidates, setImpactCandidates] = useState<any[]>([]);
   const [impactLoading, setImpactLoading] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'runtime' | 'prompts'>('runtime');
+  const [runtimeSettingsOpen, setRuntimeSettingsOpen] = useState(false);
   const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings>({
     python: '',
     node: '',
@@ -117,20 +159,20 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     powershell: ''
   });
   const [settingsSaving, setSettingsSaving] = useState(false);
-  const [settingsStatus, setSettingsStatus] = useState('');
-  const [promptPresets, setPromptPresets] = useState<PromptPreset[]>([
-    { id: 'default', name: 'Nexus Default', description: 'Locked system template that ships with Nexus.', isDefault: true },
-    { id: 'system-safe', name: 'System Safe', description: 'Compact, structured prompt for routine work.' },
-    { id: 'deep-debug', name: 'Deep Debug', description: 'Biases toward runtime and failure analysis.' }
-  ]);
+  const [settingsFlash, setSettingsFlash] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<RuntimeDiagnosticsMap>({});
+  const [promptPresets, setPromptPresets] = useState<PromptPreset[]>([]);
   const [selectedPromptPresetId, setSelectedPromptPresetId] = useState('default');
-  const [promptSettingsOpen, setPromptSettingsOpen] = useState(false);
   const [newPresetName, setNewPresetName] = useState('My Prompt Preset');
   const [newPresetDescription, setNewPresetDescription] = useState('A custom prompt framing preset.');
+  const [newPresetTemplate, setNewPresetTemplate] = useState('Task: {{goal}}\nMode: {{mode}}\nUse selected context to produce implementation steps and code changes.');
   const [editPresetName, setEditPresetName] = useState('');
   const [editPresetDescription, setEditPresetDescription] = useState('');
+  const [editPresetTemplate, setEditPresetTemplate] = useState('');
   const [manualPromptAddEnabled, setManualPromptAddEnabled] = useState(false);
+  const [allowPresetChangeInPreview, setAllowPresetChangeInPreview] = useState(true);
   const [manualPromptSearch, setManualPromptSearch] = useState('');
+  const [manualPromptFocusedIndex, setManualPromptFocusedIndex] = useState(0);
 
   const runtimeFetchInFlight = useRef(false);
   const runtimeFetchQueued = useRef(false);
@@ -141,12 +183,10 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     if (!selectedPreset) return;
     setEditPresetName(selectedPreset.isDefault ? '' : selectedPreset.name);
     setEditPresetDescription(selectedPreset.isDefault ? '' : selectedPreset.description);
+    setEditPresetTemplate(selectedPreset.isDefault ? '' : (selectedPreset.template || ''));
   }, [selectedPreset?.id]);
 
-  const openSettings = (tab: 'runtime' | 'prompts' = 'runtime') => {
-    setSettingsTab(tab);
-    setSettingsOpen(true);
-  };
+  const openRuntimeSettings = () => setRuntimeSettingsOpen(true);
 
   const fetchContextStatus = useCallback(async () => {
     try {
@@ -207,9 +247,33 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     }
   }, []);
 
+  const fetchRuntimeDiagnostics = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/settings/runtimes/diagnostics`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setRuntimeDiagnostics(data || {});
+    } catch (err) {
+      console.error('Runtime diagnostics fetch failed', err);
+    }
+  }, []);
+
+  const fetchPromptSettings = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/settings/prompts`);
+      if (!res.ok) return;
+      const data: PromptSettingsResponse = await res.json();
+      setPromptPresets(Array.isArray(data.presets) ? data.presets : []);
+      setSelectedPromptPresetId(data.selected_preset_id || 'default');
+      setManualPromptAddEnabled(Boolean(data.manual_file_add_enabled));
+      setAllowPresetChangeInPreview(Boolean(data.allow_preset_change_in_preview ?? true));
+    } catch (err) {
+      console.error('Prompt settings fetch failed', err);
+    }
+  }, []);
+
   const saveRuntimeSettings = useCallback(async () => {
     setSettingsSaving(true);
-    setSettingsStatus('');
     try {
       const res = await fetch(`${API_BASE}/settings/runtimes`, {
         method: 'POST',
@@ -217,15 +281,45 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
         body: JSON.stringify(runtimeSettings)
       });
       if (!res.ok) throw new Error('Failed to save runtime settings');
-      setSettingsStatus('Saved runtime paths');
-      window.setTimeout(() => setSettingsStatus(''), 1800);
+      await fetchRuntimeDiagnostics();
+      setSettingsFlash({ type: 'success', message: 'Runtime settings saved' });
+      window.setTimeout(() => setSettingsFlash(null), 1800);
     } catch (err) {
-      setSettingsStatus('Could not save runtime paths');
       console.error('Runtime settings save failed', err);
+      setSettingsFlash({ type: 'error', message: 'Could not save runtime settings' });
+      window.setTimeout(() => setSettingsFlash(null), 2200);
     } finally {
       setSettingsSaving(false);
     }
-  }, [runtimeSettings]);
+  }, [fetchRuntimeDiagnostics, runtimeSettings]);
+
+  const savePromptSettings = useCallback(async (nextPresets: PromptPreset[], nextSelectedId: string) => {
+    setSettingsSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/settings/prompts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          selected_preset_id: nextSelectedId,
+          manual_file_add_enabled: manualPromptAddEnabled,
+          allow_preset_change_in_preview: allowPresetChangeInPreview,
+          presets: nextPresets
+        })
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || payload.status === 'error') {
+        throw new Error(payload.message || 'Failed to save prompt settings');
+      }
+      setSettingsFlash({ type: 'success', message: 'Prompt presets saved' });
+      window.setTimeout(() => setSettingsFlash(null), 1800);
+    } catch (err) {
+      console.error('Prompt settings save failed', err);
+      setSettingsFlash({ type: 'error', message: 'Could not save prompt presets' });
+      window.setTimeout(() => setSettingsFlash(null), 2200);
+    } finally {
+      setSettingsSaving(false);
+    }
+  }, [allowPresetChangeInPreview, manualPromptAddEnabled]);
 
   const flushActiveFileDiagnostics = useCallback(async () => {
     if (!activeTab) return;
@@ -283,6 +377,8 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     fetchContextStatus();
     fetchRuntime();
     fetchRuntimeSettings();
+    fetchRuntimeDiagnostics();
+    fetchPromptSettings();
 
     // Background polling for runtime telemetry (VS Code-like reactive behavior)
     const runtimeInterval = setInterval(() => {
@@ -298,7 +394,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
       clearInterval(runtimeInterval);
       window.removeEventListener('nexus-runtime-updated', handleRuntimeUpdated);
     };
-  }, [fetchContextStatus, fetchRuntime, fetchRuntimeSettings, isProjectLoaded, resetWorkflowState]);
+  }, [fetchContextStatus, fetchPromptSettings, fetchRuntime, fetchRuntimeDiagnostics, fetchRuntimeSettings, isProjectLoaded, resetWorkflowState]);
 
   const initializeContext = async () => {
     if (!isProjectLoaded) return;
@@ -447,18 +543,19 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
       const res = await fetch(`${API_BASE}/context/assemble`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          task: goal,
-          active_file: activeTab?.path,
-          selected_files: Array.from(selectedPaths),
-          selected_candidates: candidates.filter((candidate) => selectedPaths.has(candidate.file_metadata.rel_path)),
-          selected_slices: Object.fromEntries(
-            Object.entries(sliceSelection).map(([k, v]) => [k, Array.from(v)])
-          ),
-          full_file_overrides: Array.from(fullFileOverrides),
-          mode
-        })
-      });
+          body: JSON.stringify({
+            task: goal,
+            active_file: activeTab?.path,
+            selected_files: Array.from(selectedPaths),
+            selected_candidates: candidates.filter((candidate) => selectedPaths.has(candidate.file_metadata.rel_path)),
+            selected_slices: Object.fromEntries(
+              Object.entries(sliceSelection).map(([k, v]) => [k, Array.from(v)])
+            ),
+            full_file_overrides: Array.from(fullFileOverrides),
+            mode,
+            selected_preset_id: selectedPromptPresetId
+          })
+        });
       if (!res.ok) throw new Error(`Assembly failed: ${res.status}`);
       const data = await res.json();
       setPrompt(data.prompt);
@@ -477,36 +574,59 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     const description = newPresetDescription.trim();
     if (!name || !description) return;
     const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `preset-${Date.now()}`;
-    setPromptPresets((prev) => [...prev, { id, name, description }]);
+    const nextPresets = [...promptPresets, { id, name, description, template: newPresetTemplate.trim() }];
+    setPromptPresets(nextPresets);
     setSelectedPromptPresetId(id);
     setEditPresetName(name);
     setEditPresetDescription(description);
+    setEditPresetTemplate(newPresetTemplate.trim());
+    void savePromptSettings(nextPresets, id);
   };
 
   const updatePromptPreset = () => {
     if (!selectedPreset || selectedPreset.isDefault) return;
-    setPromptPresets((prev) =>
-      prev.map((preset) =>
-        preset.id === selectedPreset.id
-          ? { ...preset, name: editPresetName.trim() || preset.name, description: editPresetDescription.trim() || preset.description }
-          : preset
-      )
+    const nextPresets = promptPresets.map((preset) =>
+      preset.id === selectedPreset.id
+        ? {
+            ...preset,
+            name: editPresetName.trim() || preset.name,
+            description: editPresetDescription.trim() || preset.description,
+            template: editPresetTemplate.trim() || preset.template || '',
+          }
+        : preset
     );
+    setPromptPresets(nextPresets);
+    void savePromptSettings(nextPresets, selectedPromptPresetId);
   };
 
   const deletePromptPreset = () => {
     if (!selectedPreset || selectedPreset.isDefault) return;
-    setPromptPresets((prev) => prev.filter((preset) => preset.id !== selectedPreset.id));
+    const nextPresets = promptPresets.filter((preset) => preset.id !== selectedPreset.id);
+    const nextSelectedId = 'default';
+    setPromptPresets(nextPresets);
     setSelectedPromptPresetId('default');
+    void savePromptSettings(nextPresets, nextSelectedId);
   };
 
   const manualPromptMatches = useMemo(() => {
     const query = manualPromptSearch.trim().toLowerCase();
     if (!manualPromptAddEnabled || !query) return [];
     return workspaceFiles
-      .filter((file) => file.path.toLowerCase().includes(query) || file.name.toLowerCase().includes(query))
+      .map((file) => ({ file, score: scoreManualMatch(query, file) }))
+      .filter((entry) => entry.score >= 0)
+      .sort((a, b) => b.score - a.score || a.file.path.localeCompare(b.file.path))
+      .map((entry) => entry.file)
       .slice(0, 8);
   }, [manualPromptAddEnabled, manualPromptSearch, workspaceFiles]);
+  const manualSelectedCount = selectedPaths.size;
+  const manualSelectedPreview = useMemo(
+    () => Array.from(selectedPaths).slice(0, 4),
+    [selectedPaths]
+  );
+
+  useEffect(() => {
+    setManualPromptFocusedIndex(0);
+  }, [manualPromptSearch, manualPromptMatches.length]);
 
   const addManualPromptFile = (path: string) => {
     const next = new Set(selectedPaths);
@@ -514,6 +634,19 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     setSelectedPaths(next);
     setManualPromptSearch('');
   };
+  const removeManualPromptFile = (path: string) => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      next.delete(path);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (!manualPromptAddEnabled) {
+      setManualPromptSearch('');
+    }
+  }, [manualPromptAddEnabled]);
 
   const toggleSelection = (path: string) => {
     const next = new Set(selectedPaths);
@@ -780,58 +913,41 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
 
       <div className="panel-footer">
         <span>NEXUS CONTEXT ENGINE v0.2.0</span>
-        <button className="footer-settings-btn" title="Nexus Settings" onClick={() => openSettings('runtime')} type="button">
+        <button className="footer-settings-btn" title="Runtime Settings" onClick={openRuntimeSettings} type="button">
           <Settings size={12} />
         </button>
       </div>
 
-      {settingsOpen && (
+      {runtimeSettingsOpen && (
         <div className="intel-modal-backdrop">
           <div className="intel-modal settings-modal">
             <div className="intel-modal-header">
               <div className="intel-modal-header-main">
                 <div className="intel-modal-title accent">
                   <Settings size={16} strokeWidth={2.5} />
-                  <span>Nexus Settings</span>
+                  <span>Runtime Settings</span>
                 </div>
                 <div className="intel-modal-subtitle">
-                  <span>Runtime paths and prompt presets live in one Nexus settings hub.</span>
+                  <span>Configure deterministic runtime paths and inspect runtime source resolution.</span>
                 </div>
               </div>
-              <button className="intel-modal-close" onClick={() => setSettingsOpen(false)} type="button">
+              <button className="intel-modal-close" onClick={() => setRuntimeSettingsOpen(false)} type="button">
                 <X size={16} />
               </button>
             </div>
 
             <div className="intel-modal-body custom-scrollbar settings-modal-body">
-              <div className="settings-tabbar">
-                <button
-                  type="button"
-                  className={`settings-tab ${settingsTab === 'runtime' ? 'active' : ''}`}
-                  onClick={() => setSettingsTab('runtime')}
-                >
-                  Runtimes
-                </button>
-                <button
-                  type="button"
-                  className={`settings-tab ${settingsTab === 'prompts' ? 'active' : ''}`}
-                  onClick={() => setSettingsTab('prompts')}
-                >
-                  Prompt Presets
-                </button>
-              </div>
-
-              <div className="settings-hero">
-                <div className="settings-hero-copy">
-                  <div className="settings-hero-title">Language runtime registry</div>
-                  <div className="settings-hero-subtitle">
-                    Keep Nexus self-contained now, and switch any runtime to a custom path later without changing the workflow.
+              <section className="settings-section">
+                <div className="settings-section-label">Runtime Category</div>
+                <div className="settings-hero">
+                  <div className="settings-hero-copy">
+                    <div className="settings-hero-title">Language runtime registry</div>
+                    <div className="settings-hero-subtitle">Keep Nexus self-contained now, and switch any runtime to a custom path later without changing the workflow.</div>
                   </div>
+                  <div className="settings-hero-badge">Nexus first, custom optional</div>
                 </div>
-                <div className="settings-hero-badge">Nexus first, custom optional</div>
-              </div>
 
-              <div className="settings-grid">
+                <div className="settings-grid">
                 {[
                   { key: 'python', label: 'Python', placeholder: 'backend/runtimes/python/python.exe' },
                   { key: 'node', label: 'Node.js', placeholder: 'backend/runtimes/node/node.exe' },
@@ -845,7 +961,15 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                   <label className="runtime-setting-row" key={runtime.key}>
                     <div className="runtime-setting-meta">
                       <span className="runtime-setting-label">{runtime.label}</span>
-                      <span className="runtime-setting-hint">Executable path for this language</span>
+                      <span className="runtime-setting-hint">
+                        Executable path for this language
+                        {runtimeDiagnostics[runtime.key] && (
+                          <> · {runtimeDiagnostics[runtime.key].source}</>
+                        )}
+                      </span>
+                      {runtimeDiagnostics[runtime.key]?.resolved && (
+                        <span className="runtime-setting-hint">{runtimeDiagnostics[runtime.key].resolved}</span>
+                      )}
                     </div>
                     <input
                       className="runtime-setting-input"
@@ -856,111 +980,106 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                     />
                   </label>
                 ))}
-              </div>
+                </div>
+              </section>
 
-              <div className="settings-note">
-                Later we can add auto-detect, download/install, and per-project runtime overrides without changing this layout.
-              </div>
+              <div className="settings-section-divider" />
 
-              {settingsTab === 'prompts' && (
+              <section className="settings-section">
+                <div className="settings-section-label">Prompt Category</div>
+                <div className="settings-hero">
+                  <div className="settings-hero-copy">
+                    <div className="settings-hero-title">Prompt preset library</div>
+                    <div className="settings-hero-subtitle">Create, edit, and select reusable prompt styles. Default preset stays locked.</div>
+                  </div>
+                  <div className="settings-hero-badge">Prompt controls</div>
+                </div>
+
                 <div className="settings-grid prompt-settings-grid">
+                  <div className="settings-panel full-span">
+                    <div className="settings-panel-title">Prompt context behavior</div>
+                    <div className="settings-panel-copy">Global controls for Context Preview behavior.</div>
+                    <label className="manual-add-toggle switchy">
+                      <input
+                        type="checkbox"
+                        checked={allowPresetChangeInPreview}
+                        onChange={(e) => setAllowPresetChangeInPreview(e.target.checked)}
+                      />
+                      <span className="switch-track"><span className="switch-thumb" /></span>
+                      <span>Allow prompt preset switching in Context Preview</span>
+                    </label>
+                    <label className="manual-add-toggle switchy">
+                      <input
+                        type="checkbox"
+                        checked={manualPromptAddEnabled}
+                        onChange={(e) => setManualPromptAddEnabled(e.target.checked)}
+                      />
+                      <span className="switch-track"><span className="switch-thumb" /></span>
+                      <span>Enable manual file addition in Context Preview</span>
+                    </label>
+                  </div>
+
                   <div className="settings-panel">
                     <div className="settings-panel-title">Available presets</div>
                     <div className="prompt-preset-admin-list">
                       {promptPresets.map((preset) => (
-                        <button
-                          key={preset.id}
-                          className={`prompt-preset-admin-row ${selectedPromptPresetId === preset.id ? 'active' : ''}`}
-                          onClick={() => {
-                            setSelectedPromptPresetId(preset.id);
-                            setEditPresetName(preset.isDefault ? '' : preset.name);
-                            setEditPresetDescription(preset.isDefault ? '' : preset.description);
-                          }}
-                          type="button"
-                        >
+                        <button key={preset.id} className={`prompt-preset-admin-row ${selectedPromptPresetId === preset.id ? 'active' : ''}`} onClick={() => { setSelectedPromptPresetId(preset.id); setEditPresetName(preset.isDefault ? '' : preset.name); setEditPresetDescription(preset.isDefault ? '' : preset.description); setEditPresetTemplate(preset.isDefault ? '' : (preset.template || '')); }} type="button">
                           <span>{preset.name}</span>
                           {preset.isDefault ? <span className="prompt-preset-admin-tag">Default</span> : <span className="prompt-preset-admin-tag">Custom</span>}
                         </button>
                       ))}
                     </div>
                   </div>
-
                   <div className="settings-panel">
                     <div className="settings-panel-title">Edit preset</div>
-                    <div className="settings-panel-copy">
-                      Default preset is locked. Select a custom preset to rename or refine it.
-                    </div>
-                    <input
-                      className="runtime-setting-input"
-                      placeholder="Preset name"
-                      value={editPresetName}
-                      onChange={(e) => setEditPresetName(e.target.value)}
-                      disabled={selectedPreset?.isDefault}
-                    />
-                    <textarea
-                      className="runtime-setting-input settings-textarea"
-                      placeholder="Preset description"
-                      value={editPresetDescription}
-                      onChange={(e) => setEditPresetDescription(e.target.value)}
-                      disabled={selectedPreset?.isDefault}
-                    />
+                    <div className="settings-panel-copy">Default preset is locked. Select a custom preset to refine it.</div>
+                    <input className="runtime-setting-input" placeholder="Preset name" value={editPresetName} onChange={(e) => setEditPresetName(e.target.value)} disabled={selectedPreset?.isDefault} />
+                    <textarea className="runtime-setting-input settings-textarea" placeholder="Preset description" value={editPresetDescription} onChange={(e) => setEditPresetDescription(e.target.value)} disabled={selectedPreset?.isDefault} />
+                    <textarea className="runtime-setting-input settings-textarea prompt-template-input" placeholder="Preset template body (supports tokens like {{goal}}, {{mode}}, {{active_file}})" value={editPresetTemplate} onChange={(e) => setEditPresetTemplate(e.target.value)} disabled={selectedPreset?.isDefault} />
                     <div className="settings-actions compact">
-                      <button className="modal-btn modal-btn-secondary" onClick={updatePromptPreset} disabled={selectedPreset?.isDefault} type="button">
-                        Update
-                      </button>
-                      <button className="modal-btn modal-btn-confirm destructive" onClick={deletePromptPreset} disabled={selectedPreset?.isDefault} type="button">
-                        Delete
-                      </button>
+                      <button className="modal-btn modal-btn-secondary" onClick={updatePromptPreset} disabled={selectedPreset?.isDefault} type="button">Update</button>
+                      <button className="modal-btn modal-btn-confirm destructive" onClick={deletePromptPreset} disabled={selectedPreset?.isDefault} type="button">Delete</button>
                     </div>
+                    {!selectedPreset?.isDefault && (
+                      <pre className="prompt-template-preview">{editPresetTemplate || '(Template preview will appear here)'}</pre>
+                    )}
                   </div>
-
                   <div className="settings-panel full-span">
                     <div className="settings-panel-title">Create preset</div>
-                    <div className="settings-panel-copy">
-                      Start from a fresh prompt style. This only creates custom presets.
-                    </div>
-                    <input
-                      className="runtime-setting-input"
-                      placeholder="New preset name"
-                      value={newPresetName}
-                      onChange={(e) => setNewPresetName(e.target.value)}
-                    />
-                    <textarea
-                      className="runtime-setting-input settings-textarea"
-                      placeholder="New preset description"
-                      value={newPresetDescription}
-                      onChange={(e) => setNewPresetDescription(e.target.value)}
-                    />
+                    <input className="runtime-setting-input" placeholder="New preset name" value={newPresetName} onChange={(e) => setNewPresetName(e.target.value)} />
+                    <textarea className="runtime-setting-input settings-textarea" placeholder="New preset description" value={newPresetDescription} onChange={(e) => setNewPresetDescription(e.target.value)} />
+                    <textarea className="runtime-setting-input settings-textarea prompt-template-input" placeholder="New preset template body (supports tokens like {{goal}}, {{mode}}, {{active_file}})" value={newPresetTemplate} onChange={(e) => setNewPresetTemplate(e.target.value)} />
+                    <pre className="prompt-template-preview">{newPresetTemplate}</pre>
                     <div className="settings-actions compact">
-                      <button className="modal-btn modal-btn-cancel" onClick={createPromptPreset} type="button">
-                        Create preset
-                      </button>
+                      <button className="modal-btn modal-btn-cancel" onClick={createPromptPreset} type="button">Create preset</button>
                     </div>
                   </div>
                 </div>
-              )}
+              </section>
             </div>
 
             <div className="intel-modal-footer settings-modal-footer">
-              <div className="settings-status">{settingsStatus || 'Settings are stored locally by Nexus.'}</div>
+              {settingsFlash && (
+                <div className={`settings-flash ${settingsFlash.type}`}>{settingsFlash.message}</div>
+              )}
               <div className="settings-actions">
                 <button
                   className="modal-btn modal-btn-cancel"
-                  onClick={() => setRuntimeSettings({
-                    python: '',
-                    node: '',
-                    java: '',
-                    gcc: '',
-                    gpp: '',
-                    dotnet: '',
-                    bash: '',
-                    powershell: ''
-                  })}
+                  onClick={() => {
+                    void fetchRuntimeSettings();
+                    void fetchRuntimeDiagnostics();
+                    void fetchPromptSettings();
+                  }}
                   type="button"
                 >
-                  Reset
+                  Reload
                 </button>
-                <button className="modal-btn modal-btn-confirm default" onClick={saveRuntimeSettings} disabled={settingsSaving} type="button">
+                <button
+                  className="modal-btn modal-btn-confirm default"
+                  onClick={() => { void saveRuntimeSettings(); void savePromptSettings(promptPresets, selectedPromptPresetId); }}
+                  disabled={settingsSaving}
+                  type="button"
+                >
                   {settingsSaving ? 'Saving...' : 'Save Settings'}
                 </button>
               </div>
@@ -1003,80 +1122,106 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
             </div>
 
             <div className="intel-modal-body custom-scrollbar">
-              <div className="prompt-preset-strip">
-                <div className="prompt-preset-strip-header">
-                  <div>
-                    <div className="prompt-preset-strip-title">Prompt preset</div>
-                    <div className="prompt-preset-strip-subtitle">
-                      Select a template for how Nexus should frame the assembled prompt.
+              {(allowPresetChangeInPreview || manualPromptAddEnabled) && (
+                <div className="prompt-preset-strip">
+                  {allowPresetChangeInPreview && (
+                    <div className="prompt-preset-list">
+                      {promptPresets.map((preset) => (
+                        <button
+                          key={preset.id}
+                          className={`prompt-preset-chip ${selectedPromptPresetId === preset.id ? 'active' : ''} ${preset.isDefault ? 'locked' : ''}`}
+                          onClick={() => setSelectedPromptPresetId(preset.id)}
+                          type="button"
+                        >
+                          <span>{preset.name}</span>
+                          {preset.isDefault && <span className="prompt-preset-lock">Locked</span>}
+                        </button>
+                      ))}
                     </div>
-                  </div>
-                  <button className="footer-settings-btn" onClick={() => openSettings('prompts')} type="button" title="Manage prompt presets">
-                    <Settings size={12} />
-                  </button>
-                </div>
-                <div className="prompt-preset-list">
-                  {promptPresets.map((preset) => (
-                    <button
-                      key={preset.id}
-                      className={`prompt-preset-chip ${selectedPromptPresetId === preset.id ? 'active' : ''} ${preset.isDefault ? 'locked' : ''}`}
-                      onClick={() => setSelectedPromptPresetId(preset.id)}
-                      type="button"
-                    >
-                      <span>{preset.name}</span>
-                      {preset.isDefault && <span className="prompt-preset-lock">Locked</span>}
-                    </button>
-                  ))}
-                </div>
-                <div className="prompt-preset-note">
-                  {selectedPreset?.description}
-                </div>
-                <div className="manual-add-row">
-                  <label className="manual-add-toggle">
-                    <input
-                      type="checkbox"
-                      checked={manualPromptAddEnabled}
-                      onChange={(e) => setManualPromptAddEnabled(e.target.checked)}
-                    />
-                    <span>Allow manual file add in context preview</span>
-                  </label>
+                  )}
                   {manualPromptAddEnabled && (
-                    <div className="manual-add-panel">
-                      <input
-                        className="manual-add-search"
-                        placeholder="Search any workspace file..."
-                        value={manualPromptSearch}
-                        onChange={(e) => setManualPromptSearch(e.target.value)}
-                        type="text"
-                      />
-                      <div className="manual-add-results">
-                        {manualPromptSearch.trim() ? (
-                          manualPromptMatches.length ? (
-                            manualPromptMatches.map((file) => (
-                              <button
-                                key={file.path}
-                                className={`manual-add-result ${selectedPaths.has(file.path) ? 'selected' : ''}`}
-                                onClick={() => addManualPromptFile(file.path)}
-                                type="button"
-                              >
-                                <span className="manual-add-result-name">{file.name}</span>
-                                <span className="manual-add-result-path">{file.path}</span>
-                                <span className="manual-add-result-action">
-                                  {selectedPaths.has(file.path) ? 'Added' : 'Add'}
-                                </span>
-                              </button>
-                            ))
+                    <div className="manual-add-row">
+                      <div className="manual-add-panel">
+                        <input
+                          className="manual-add-search"
+                          placeholder="Search by file name or path..."
+                          value={manualPromptSearch}
+                          onChange={(e) => setManualPromptSearch(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (!manualPromptMatches.length) return;
+                            if (e.key === 'ArrowDown') {
+                              e.preventDefault();
+                              setManualPromptFocusedIndex((prev) => Math.min(prev + 1, manualPromptMatches.length - 1));
+                            } else if (e.key === 'ArrowUp') {
+                              e.preventDefault();
+                              setManualPromptFocusedIndex((prev) => Math.max(prev - 1, 0));
+                            } else if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const target = manualPromptMatches[manualPromptFocusedIndex];
+                              if (target) {
+                                if (selectedPaths.has(target.path)) removeManualPromptFile(target.path);
+                                else addManualPromptFile(target.path);
+                              }
+                            }
+                          }}
+                          type="text"
+                        />
+                        <div className="manual-add-hint-row">
+                          <span>{manualSelectedCount} file{manualSelectedCount !== 1 ? 's' : ''} selected</span>
+                          <span>Enter to add or remove</span>
+                        </div>
+                        <div className="manual-add-results">
+                          {manualPromptSearch.trim() ? (
+                            manualPromptMatches.length ? (
+                              manualPromptMatches.map((file, idx) => (
+                                <button
+                                  key={file.path}
+                                  className={`manual-add-result ${selectedPaths.has(file.path) ? 'selected' : ''} ${manualPromptFocusedIndex === idx ? 'focused' : ''}`}
+                                  onClick={() => {
+                                    if (selectedPaths.has(file.path)) removeManualPromptFile(file.path);
+                                    else addManualPromptFile(file.path);
+                                  }}
+                                  onMouseEnter={() => setManualPromptFocusedIndex(idx)}
+                                  type="button"
+                                >
+                                  <span className="manual-add-result-name">{highlightMatch(file.name, manualPromptSearch)}</span>
+                                  <span className="manual-add-result-path">{highlightMatch(file.path, manualPromptSearch)}</span>
+                                  <span className="manual-add-result-action">
+                                    {selectedPaths.has(file.path) ? 'Remove' : 'Add'}
+                                  </span>
+                                </button>
+                              ))
+                            ) : (
+                              <div className="manual-add-empty">No matching files yet.</div>
+                            )
                           ) : (
-                            <div className="manual-add-empty">No matching files yet.</div>
-                          )
-                        ) : (
-                          <div className="manual-add-empty">Search any file in the workspace, even if Nexus did not score it.</div>
+                            <div className="manual-add-empty">Search any workspace file to include it in prompt context.</div>
+                          )}
+                        </div>
+                        {manualSelectedCount > 0 && (
+                          <div className="manual-selected-tray">
+                            {manualSelectedPreview.map((path) => (
+                              <button
+                                key={path}
+                                className="manual-selected-chip"
+                                onClick={() => removeManualPromptFile(path)}
+                                type="button"
+                                title={path}
+                              >
+                                <span>{path.split('/').pop()}</span>
+                                <X size={11} />
+                              </button>
+                            ))}
+                            {manualSelectedCount > manualSelectedPreview.length && (
+                              <span className="manual-selected-more">+{manualSelectedCount - manualSelectedPreview.length} more</span>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>
                   )}
                 </div>
-              </div>
+              )}
 
               <GlobalIntelligence 
                 runtimeCount={runtimeArtifacts.length}
@@ -1137,107 +1282,6 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
         </div>
       )}
 
-      {promptSettingsOpen && (
-        <div className="intel-modal-backdrop">
-          <div className="intel-modal settings-modal">
-            <div className="intel-modal-header">
-              <div className="intel-modal-header-main">
-                <div className="intel-modal-title accent">
-                  <Sparkles size={16} strokeWidth={2.5} />
-                  <span>Prompt Presets</span>
-                </div>
-                <div className="intel-modal-subtitle">
-                  <span>Default preset is locked. Create or adjust your own prompt styles here.</span>
-                </div>
-              </div>
-              <button className="intel-modal-close" onClick={() => setPromptSettingsOpen(false)} type="button">
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="intel-modal-body custom-scrollbar settings-modal-body">
-              <div className="settings-grid prompt-settings-grid">
-                <div className="settings-panel">
-                  <div className="settings-panel-title">Available presets</div>
-                  <div className="prompt-preset-admin-list">
-                    {promptPresets.map((preset) => (
-                      <button
-                        key={preset.id}
-                        className={`prompt-preset-admin-row ${selectedPromptPresetId === preset.id ? 'active' : ''}`}
-                        onClick={() => {
-                          setSelectedPromptPresetId(preset.id);
-                          setNewPresetName(preset.name);
-                          setNewPresetDescription(preset.description);
-                        }}
-                        type="button"
-                      >
-                        <span>{preset.name}</span>
-                        {preset.isDefault ? <span className="prompt-preset-admin-tag">Default</span> : <span className="prompt-preset-admin-tag">Custom</span>}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="settings-panel">
-                  <div className="settings-panel-title">Edit preset</div>
-                  <div className="settings-panel-copy">
-                    Default preset is locked. Select a custom preset to rename or refine it.
-                  </div>
-                  <input
-                    className="runtime-setting-input"
-                    placeholder="Preset name"
-                    value={editPresetName}
-                    onChange={(e) => setEditPresetName(e.target.value)}
-                    disabled={selectedPreset?.isDefault}
-                  />
-                  <textarea
-                    className="runtime-setting-input settings-textarea"
-                    placeholder="Preset description"
-                    value={editPresetDescription}
-                    onChange={(e) => setEditPresetDescription(e.target.value)}
-                    disabled={selectedPreset?.isDefault}
-                  />
-                  <div className="settings-actions compact">
-                    <button className="modal-btn modal-btn-secondary" onClick={updatePromptPreset} disabled={selectedPreset?.isDefault} type="button">
-                      Update
-                    </button>
-                    <button className="modal-btn modal-btn-confirm destructive" onClick={deletePromptPreset} disabled={selectedPreset?.isDefault} type="button">
-                      Delete
-                    </button>
-                  </div>
-                </div>
-
-                <div className="settings-panel">
-                  <div className="settings-panel-title">Create preset</div>
-                  <div className="settings-panel-copy">
-                    Start from a fresh prompt style. This only creates custom presets.
-                  </div>
-                  <input
-                    className="runtime-setting-input"
-                    placeholder="New preset name"
-                    value={newPresetName}
-                    onChange={(e) => setNewPresetName(e.target.value)}
-                  />
-                  <textarea
-                    className="runtime-setting-input settings-textarea"
-                    placeholder="New preset description"
-                    value={newPresetDescription}
-                    onChange={(e) => setNewPresetDescription(e.target.value)}
-                  />
-                  <div className="settings-actions compact">
-                    <button className="modal-btn modal-btn-cancel" onClick={createPromptPreset} type="button">
-                      Create preset
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <div className="settings-note">
-                This is a placeholder UI for now. The backend template management will plug into these controls later.
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {promptOpen && (
         <div className="intel-modal-backdrop">

@@ -586,6 +586,9 @@ const App: React.FC = () => {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || 'Run failed');
+    if (data?.provenance) {
+      window.dispatchEvent(new CustomEvent('nexus-run-provenance', { detail: data.provenance }));
+    }
   };
 
   const handleTerminalSessionReady = useCallback((sessionId: string | null) => {

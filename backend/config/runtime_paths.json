@@ -1,10 +1,13 @@
 {
-  "python": null,
-  "node": null,
-  "java": null,
-  "gcc": null,
-  "gpp": null,
-  "dotnet": null,
-  "bash": null,
-  "powershell": null
+  "python": "E:/Nexus-IDE/backend/runtimes/python/python.exe",
+  "node": "E:/Nexus-IDE/backend/runtimes/node/node.exe",
+  "java": "E:/Nexus-IDE/backend/runtimes/java/bin/java.exe",
+  "gcc": "E:/Nexus-IDE/backend/runtimes/gcc/bin/gcc.exe",
+  "gpp": "E:/Nexus-IDE/backend/runtimes/gcc/bin/g++.exe",
+  "dotnet": "C:/Program Files/dotnet/dotnet.exe",
+  "bash": "E:/Nexus-IDE/backend/runtimes/bash/usr/bin/bash.exe",
+  "powershell": "E:/Nexus-IDE/backend/runtimes/powershell/7/pwsh.exe"
 }
+
+
+

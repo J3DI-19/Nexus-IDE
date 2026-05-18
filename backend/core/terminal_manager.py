@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import os
 import shlex
 import signal
@@ -13,7 +15,7 @@ from typing import Dict, Optional
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 
 from core.runtime_registry import runtime_registry
-from utils.security import get_project_root
+from utils.security import get_project_root, is_safe_path
 
 try:
     import winpty
@@ -23,7 +25,13 @@ except ImportError:  # pragma: no cover - Windows dependency
 
 def _default_shell() -> str:
     if os.name == "nt":
-        return shutil.which("powershell") or shutil.which("cmd") or "cmd"
+        pwsh = shutil.which("pwsh")
+        if pwsh:
+            return f'"{pwsh}" -NoLogo -NoProfile'
+        powershell = shutil.which("powershell")
+        if powershell:
+            return f'"{powershell}" -NoLogo -NoProfile'
+        return "cmd"
     return os.environ.get("SHELL") or shutil.which("bash") or "sh"
 
 
@@ -31,6 +39,22 @@ def _quote(path: Path) -> str:
     if os.name == "nt":
         return subprocess.list2cmdline([str(path)])
     return shlex.quote(str(path))
+
+
+def _quote_project_path(path: Path) -> str:
+    root = get_project_root()
+    try:
+        rel = path.resolve().relative_to(root.resolve())
+        if os.name == "nt":
+            return subprocess.list2cmdline([f".\\{str(rel).replace('/', '\\')}"])
+        return shlex.quote(f"./{rel.as_posix()}")
+    except Exception:
+        return _quote(path)
+
+
+def _ps_single_quote(path: Path) -> str:
+    # PowerShell-safe literal string, preserving backslashes and spaces.
+    return "'" + str(path).replace("'", "''") + "'"
 
 
 def _workspace_runtime_dir() -> Path:
@@ -54,92 +78,240 @@ def _require_runtime(*parts: str, detail: str) -> str:
     raise HTTPException(status_code=400, detail=detail)
 
 
-def _run_compiled_command(compiler: str, source: Path, exe: Path, extra_flags: str = "") -> str:
+def _run_compiled_command(compiler: str, source: Path, exe: Path, extra_flags: str = "", runtime_bin_dir: Optional[Path] = None) -> str:
     quoted_source = _quote(source)
     quoted_exe = _quote(exe)
     compile_cmd = f"{compiler} {quoted_source}{extra_flags} -o {quoted_exe}"
     if os.name == "nt":
+        if runtime_bin_dir:
+            quoted_bin = _ps_single_quote(runtime_bin_dir)
+            return f"$env:PATH={quoted_bin} + ';' + $env:PATH; {compile_cmd}; if ($LASTEXITCODE -eq 0) {{ & {quoted_exe} }}"
         return f"{compile_cmd}; if ($LASTEXITCODE -eq 0) {{ & {quoted_exe} }}"
     return f"{compile_cmd} && {quoted_exe}"
 
 
-def build_run_command(path: str) -> str:
-    file_path = (get_project_root() / path).resolve()
+def _collect_cpp_sources(primary: Path) -> list[Path]:
+    exts = {".cpp", ".cc", ".cxx"}
+    files = sorted(
+        p for p in primary.parent.iterdir()
+        if p.is_file() and p.suffix.lower() in exts
+    )
+    if primary not in files:
+        files.insert(0, primary)
+    return files
+
+
+def _find_nearest_csproj(start: Path, root: Path) -> Optional[Path]:
+    current = start.parent
+    while True:
+        matches = sorted(current.glob("*.csproj"))
+        if matches:
+            return matches[0]
+        if current == root or current.parent == current:
+            break
+        current = current.parent
+    return None
+
+
+def _runtime_version(executable: Path) -> Optional[str]:
+    probes = [["--version"], ["-version"], ["/?"]]
+    for args in probes:
+        try:
+            result = subprocess.run(
+                [str(executable), *args],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            output = (result.stdout or result.stderr or "").strip().splitlines()
+            if output:
+                return output[0][:200]
+        except Exception:
+            continue
+    return None
+
+
+def _sha256_file(path: Path) -> Optional[str]:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(2 * 1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.hexdigest()
+    except Exception:
+        return None
+
+
+def build_run_command(path: str) -> dict:
+    file_path = is_safe_path((get_project_root() / path).resolve())
     ext = file_path.suffix.lower()
-    quoted = _quote(file_path)
+    quoted = _quote_project_path(file_path)
+    provenance: dict = {
+        "runtime": None,
+        "source": "missing",
+        "path": None,
+        "version": None,
+        "hash": None,
+        "determinism": "unresolved",
+        "working_directory": str(get_project_root()),
+        "command": None,
+        "run_mode": "direct",
+    }
+
+    def _set_runtime(key: str, bundled_relpath: str, detail: str):
+        resolution = runtime_registry.resolve_with_metadata(key, bundled_relpath)
+        if not resolution.path:
+            raise HTTPException(status_code=400, detail=detail)
+        provenance["runtime"] = key
+        provenance["source"] = resolution.source
+        provenance["path"] = str(resolution.path)
+        provenance["determinism"] = resolution.determinism
+        provenance["version"] = _runtime_version(resolution.path)
+        provenance["hash"] = _sha256_file(resolution.path)
+        return _quote_project_path(resolution.path), resolution.path
 
     if ext == ".py":
-        resolved = runtime_registry.resolve("python", "python/python.exe")
-        python = _quote(resolved) if resolved else None
-        if not python:
-            raise HTTPException(status_code=400, detail="Python runtime is not bundled with Nexus IDE.")
-        return f"{python} {quoted}"
+        python, _ = _set_runtime("python", "python/python.exe", "Python runtime is not available.")
+        command = f"{python} {quoted}"
+        provenance["command"] = command
+        return {"command": command, "provenance": provenance}
     if ext in {".js", ".mjs", ".cjs"}:
-        resolved = runtime_registry.resolve("node", "node/node.exe")
-        node = _quote(resolved) if resolved else None
-        if not node:
-            raise HTTPException(status_code=400, detail="Node runtime is not bundled with Nexus IDE.")
-        return f"{node} {quoted}"
+        node, _ = _set_runtime("node", "node/node.exe", "Node runtime is not available.")
+        command = f"{node} {quoted}"
+        provenance["command"] = command
+        return {"command": command, "provenance": provenance}
     if ext == ".ts":
-        node_root = runtime_registry.resolve("node", "node/node.exe")
-        node_root_dir = node_root.parent if node_root else None
+        _, node_root = _set_runtime("node", "node/node.exe", "Node runtime is not available.")
+        node_root_dir = node_root.parent
         tsx = None
         if node_root_dir:
             tsx = _quote(node_root_dir / "node_modules" / ".bin" / ("tsx.cmd" if os.name == "nt" else "tsx"))
         if not tsx or not Path(tsx.strip('"')).exists():
             tsx = None
         if tsx:
-            return f"{tsx} {quoted}"
+            command = f"{tsx} {quoted}"
+            provenance["command"] = command
+            return {"command": command, "provenance": provenance}
         ts_node = None
         if node_root_dir:
             ts_node = _quote(node_root_dir / "node_modules" / ".bin" / ("ts-node.cmd" if os.name == "nt" else "ts-node"))
         if not ts_node or not Path(ts_node.strip('"')).exists():
             ts_node = None
         if ts_node:
-            return f"{ts_node} {quoted}"
-        raise HTTPException(status_code=400, detail="TypeScript support is not bundled with Nexus IDE.")
+            command = f"{ts_node} {quoted}"
+            provenance["command"] = command
+            return {"command": command, "provenance": provenance}
+        raise HTTPException(status_code=400, detail="TypeScript support is not available.")
     if ext == ".java":
-        resolved = runtime_registry.resolve("java", "java/bin/java.exe")
-        java = _quote(resolved) if resolved else None
-        if not java:
-            raise HTTPException(status_code=400, detail="Java runtime is not bundled with Nexus IDE.")
-        return f"{java} {quoted}"
+        java, _ = _set_runtime("java", "java/bin/java.exe", "Java runtime is not available.")
+        command = f"{java} {quoted}"
+        provenance["command"] = command
+        return {"command": command, "provenance": provenance}
     if ext == ".c":
         exe = file_path.with_suffix(".exe" if os.name == "nt" else "")
-        resolved = runtime_registry.resolve("gcc", "gcc/bin/gcc.exe")
-        gcc = _quote(resolved) if resolved else None
-        if not gcc:
-            raise HTTPException(status_code=400, detail="C compiler is not bundled with Nexus IDE.")
-        return _run_compiled_command(gcc, file_path, exe)
+        gcc, _ = _set_runtime("gcc", "gcc/bin/gcc.exe", "C compiler is not available.")
+        command = _run_compiled_command(gcc, file_path, exe, runtime_bin_dir=Path(gcc.strip('"')).parent)
+        provenance["command"] = command
+        return {"command": command, "provenance": provenance}
     if ext in {".cpp", ".cc", ".cxx"}:
         exe = file_path.with_suffix(".exe" if os.name == "nt" else "")
-        resolved = runtime_registry.resolve("gpp", "gcc/bin/g++.exe") or runtime_registry.resolve("gcc", "gcc/bin/g++.exe")
-        gpp = _quote(resolved) if resolved else None
-        if not gpp:
-            raise HTTPException(status_code=400, detail="C++ compiler is not bundled with Nexus IDE.")
-        return _run_compiled_command(gpp, file_path, exe)
-    if ext == ".cs":
-        exe = file_path.with_suffix(".exe" if os.name == "nt" else "")
-        resolved = runtime_registry.resolve("dotnet", "dotnet/sdk/csc.exe")
-        csc = _quote(resolved) if resolved else None
-        if not csc:
-            raise HTTPException(status_code=400, detail="C# compiler is not bundled with Nexus IDE.")
-        compile_cmd = f"{csc} /out:{_quote(exe)} {quoted}"
+        gpp, _ = _set_runtime("gpp", "gcc/bin/g++.exe", "C++ compiler is not available.")
+        cpp_sources = _collect_cpp_sources(file_path)
+        quoted_sources = " ".join(_quote(src) for src in cpp_sources)
+        quoted_exe = _quote(exe)
+        compile_cmd = f"{gpp} {quoted_sources} -o {quoted_exe}"
+        runtime_bin = Path(gpp.strip('"')).parent
         if os.name == "nt":
-            return f"{compile_cmd}; if ($LASTEXITCODE -eq 0) {{ & {_quote(exe)} }}"
-        return f"{compile_cmd} && {_quote(exe)}"
+            command = f"$env:PATH={_ps_single_quote(runtime_bin)} + ';' + $env:PATH; {compile_cmd}; if ($LASTEXITCODE -eq 0) {{ & {quoted_exe} }}"
+        else:
+            command = f"{compile_cmd} && {quoted_exe}"
+        provenance["command"] = command
+        return {"command": command, "provenance": provenance}
+    if ext == ".cs":
+        dotnet, _ = _set_runtime("dotnet", "dotnet/dotnet.exe", ".NET runtime is not available.")
+        project_root = get_project_root()
+        csproj = _find_nearest_csproj(file_path, project_root)
+        if csproj:
+            if os.name == "nt":
+                runner_home = project_root / "backend" / ".nexus-cs-runner" / ".dotnet-home"
+                nuget_packages = project_root / "backend" / ".nexus-cs-runner" / ".nuget-packages"
+                nuget_config = project_root / "backend" / ".nexus-cs-runner" / "NuGet.Config"
+                runner_home.mkdir(parents=True, exist_ok=True)
+                nuget_packages.mkdir(parents=True, exist_ok=True)
+                if not nuget_config.exists():
+                    nuget_config.write_text(
+                        "<configuration>\n  <packageSources>\n    <clear />\n    <add key=\"nuget.org\" value=\"https://api.nuget.org/v3/index.json\" />\n  </packageSources>\n</configuration>\n",
+                        encoding="utf-8",
+                    )
+                command = (
+                    f"$env:DOTNET_CLI_HOME={_ps_single_quote(runner_home)}; "
+                    f"$env:NUGET_PACKAGES={_ps_single_quote(nuget_packages)}; "
+                    f"$env:NUGET_CONFIG_FILE={_ps_single_quote(nuget_config)}; "
+                    f"& {dotnet} run --project {_quote(csproj)}"
+                )
+            else:
+                command = f"{dotnet} run --project {_quote(csproj)}"
+            provenance["command"] = command
+            provenance["run_mode"] = "project"
+            return {"command": command, "provenance": provenance}
+
+        runner_root = project_root / "backend" / ".nexus-cs-runner" / hashlib.sha1(str(file_path.parent).encode("utf-8")).hexdigest()
+        runner_root.mkdir(parents=True, exist_ok=True)
+        program_path = runner_root / "Program.cs"
+        csproj_path = runner_root / "NexusRunner.csproj"
+        program_path.write_text(file_path.read_text(encoding="utf-8"), encoding="utf-8")
+        if not csproj_path.exists():
+            csproj_path.write_text(
+                "\n".join(
+                    [
+                        "<Project Sdk=\"Microsoft.NET.Sdk\">",
+                        "  <PropertyGroup>",
+                        "    <OutputType>Exe</OutputType>",
+                        "    <TargetFramework>net9.0</TargetFramework>",
+                        "    <ImplicitUsings>enable</ImplicitUsings>",
+                        "    <Nullable>enable</Nullable>",
+                        "  </PropertyGroup>",
+                        "</Project>",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        if os.name == "nt":
+            runner_home = project_root / "backend" / ".nexus-cs-runner" / ".dotnet-home"
+            nuget_packages = project_root / "backend" / ".nexus-cs-runner" / ".nuget-packages"
+            nuget_config = project_root / "backend" / ".nexus-cs-runner" / "NuGet.Config"
+            runner_home.mkdir(parents=True, exist_ok=True)
+            nuget_packages.mkdir(parents=True, exist_ok=True)
+            if not nuget_config.exists():
+                nuget_config.write_text(
+                    "<configuration>\n  <packageSources>\n    <clear />\n    <add key=\"nuget.org\" value=\"https://api.nuget.org/v3/index.json\" />\n  </packageSources>\n</configuration>\n",
+                    encoding="utf-8",
+                )
+            command = (
+                f"$env:DOTNET_CLI_HOME={_ps_single_quote(runner_home)}; "
+                f"$env:NUGET_PACKAGES={_ps_single_quote(nuget_packages)}; "
+                f"$env:NUGET_CONFIG_FILE={_ps_single_quote(nuget_config)}; "
+                f"& {dotnet} run --project {_quote(csproj_path)}"
+            )
+        else:
+            command = f"{dotnet} run --project {_quote(csproj_path)}"
+        provenance["command"] = command
+        provenance["run_mode"] = "single-file-runner"
+        return {"command": command, "provenance": provenance}
     if ext in {".sh", ".bash"}:
-        resolved = runtime_registry.resolve("bash", "bash/bin/bash.exe")
-        bash = _quote(resolved) if resolved else None
-        if not bash:
-            raise HTTPException(status_code=400, detail="Bash runtime is not bundled with Nexus IDE.")
-        return f"{bash} {quoted}"
+        bash, _ = _set_runtime("bash", "bash/usr/bin/bash.exe", "Bash runtime is not available.")
+        command = f"{bash} {quoted}"
+        provenance["command"] = command
+        return {"command": command, "provenance": provenance}
     if ext == ".ps1":
-        resolved = runtime_registry.resolve("powershell", "powershell/bin/powershell.exe")
-        powershell = _quote(resolved) if resolved else None
-        if not powershell:
-            raise HTTPException(status_code=400, detail="PowerShell runtime is not bundled with Nexus IDE.")
-        return f"{powershell} -NoProfile -ExecutionPolicy Bypass -File {quoted}"
+        powershell, _ = _set_runtime("powershell", "powershell/7/pwsh.exe", "PowerShell runtime is not available.")
+        command = f"{powershell} -NoProfile -ExecutionPolicy Bypass -File {quoted}"
+        provenance["command"] = command
+        return {"command": command, "provenance": provenance}
 
     raise HTTPException(status_code=400, detail=f"No run configuration for {ext or 'this file type'}.")
 
@@ -203,7 +375,8 @@ class TerminalSession:
             self.process.write(data)
 
     def run(self, command: str):
-        self.write(command.rstrip() + "\r\n")
+        # Force a clean new line before dispatching command to avoid prompt/output overlap.
+        self.write("\r\n" + command.rstrip() + "\r\n")
 
     def interrupt(self):
         with self._lock:

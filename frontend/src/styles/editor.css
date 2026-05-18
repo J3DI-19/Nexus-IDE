@@ -261,24 +261,35 @@
   flex-direction: column;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 42px),
-    #0d0e10;
+    #090d13;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
 }
 
 .terminal-host {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 6px 10px 10px;
+  padding: 8px 12px 12px;
 }
 
 .terminal-host .xterm {
   height: 100%;
   max-width: 100%;
+  font-variant-ligatures: contextual;
+  text-rendering: geometricPrecision;
 }
 
 .terminal-host .xterm-viewport,
 .terminal-host .xterm-screen {
-  border-radius: 4px;
+  border-radius: 6px;
+}
+
+.terminal-host .xterm-viewport {
+  background: rgba(6, 10, 16, 0.86) !important;
+}
+
+.terminal-host .xterm-screen canvas {
+  filter: saturate(1.06) contrast(1.03);
 }
 
 .terminal-control {

@@ -1,0 +1,27 @@
+{
+  "selected_preset_id": "default",
+  "manual_file_add_enabled": false,
+  "presets": [
+    {
+      "id": "default",
+      "name": "Nexus Default",
+      "description": "Locked system template that ships with Nexus.",
+      "template": "You are Nexus.\nGoal: {{goal}}\nMode: {{mode}}\nActive file: {{active_file}}\nUse selected context and produce a precise implementation plan and patch.",
+      "isDefault": true
+    },
+    {
+      "id": "system-safe",
+      "name": "System Safe",
+      "description": "Compact, structured prompt for routine work.",
+      "template": "Task: {{goal}}\nMode: {{mode}}\nUse the selected files as context.\nReturn concise actionable steps.",
+      "isDefault": false
+    },
+    {
+      "id": "deep-debug",
+      "name": "Deep Debug",
+      "description": "Biases toward runtime and failure analysis.",
+      "template": "Task: {{goal}}\nMode: {{mode}}\nFocus on runtime behavior, error chains, and deterministic execution risks first.",
+      "isDefault": false
+    }
+  ]
+}

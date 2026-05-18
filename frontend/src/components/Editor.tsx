@@ -13,7 +13,13 @@ interface EditorProps {
 
 const getLanguage = (path: string | null) => {
   if (!path) return 'text';
+  const fileName = path.split('/').pop()?.toLowerCase() || '';
   const ext = path.split('.').pop()?.toLowerCase();
+
+  if (fileName === 'dockerfile') return 'dockerfile';
+  if (fileName === '.env') return 'shell';
+  if (fileName === 'makefile') return 'plaintext';
+  if (fileName === 'cmakelists.txt') return 'cmake';
 
   switch (ext) {
     case 'js': return 'javascript';
@@ -21,7 +27,33 @@ const getLanguage = (path: string | null) => {
     case 'ts': return 'typescript';
     case 'tsx': return 'typescript';
     case 'py': return 'python';
+    case 'java': return 'java';
+    case 'c': return 'c';
+    case 'h': return 'c';
+    case 'cpp': return 'cpp';
+    case 'cc': return 'cpp';
+    case 'cxx': return 'cpp';
+    case 'hpp': return 'cpp';
+    case 'cs': return 'csharp';
+    case 'go': return 'go';
+    case 'rs': return 'rust';
+    case 'php': return 'php';
+    case 'rb': return 'ruby';
+    case 'kt': return 'kotlin';
+    case 'swift': return 'swift';
+    case 'sql': return 'sql';
+    case 'xml': return 'xml';
+    case 'yaml': return 'yaml';
+    case 'yml': return 'yaml';
+    case 'toml': return 'ini';
+    case 'sh': return 'shell';
+    case 'bash': return 'shell';
+    case 'zsh': return 'shell';
+    case 'ps1': return 'powershell';
+    case 'env': return 'shell';
     case 'css': return 'css';
+    case 'scss': return 'scss';
+    case 'less': return 'less';
     case 'html': return 'html';
     case 'json': return 'json';
     case 'md': return 'markdown';

@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from fastapi import HTTPException
 
-_PROJECT_ROOT = Path.cwd().resolve()
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def get_project_root() -> Path:
     return _PROJECT_ROOT

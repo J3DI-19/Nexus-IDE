@@ -33,7 +33,9 @@ class AdvancedPromptBuilder:
         context: ExtractionContext, 
         impact: Optional[ImpactResult] = None,
         mode: PromptMode = PromptMode.FEATURE,
-        runtime_artifacts: Optional[List[RuntimeArtifact]] = None
+        runtime_artifacts: Optional[List[RuntimeArtifact]] = None,
+        preset_name: Optional[str] = None,
+        preset_template: Optional[str] = None
     ) -> str:
         """
         Orchestrates prompt composition using Jinja2 and adaptive token balancing.
@@ -93,7 +95,7 @@ class AdvancedPromptBuilder:
                 
             template = self.env.get_template(template_name)
             
-            return template.render(
+            base_prompt = template.render(
                 mode=mode.value,
                 task=query.task,
                 warnings=warnings,
@@ -102,10 +104,45 @@ class AdvancedPromptBuilder:
                 related_context="\n\n".join(related_sections),
                 rules=self._build_rules(mode)
             )
+            preset_block = self._render_preset_block(
+                preset_name=preset_name,
+                preset_template=preset_template,
+                query=query,
+                mode=mode,
+                context=context
+            )
+            return f"{preset_block}\n\n{base_prompt}" if preset_block else base_prompt
         except Exception as e:
             print(f"PROMPT RENDERING ERROR: {e}")
             # Fallback to a very basic render if Jinja fails
             return f"ERROR RENDERING PROMPT: {e}\nTask: {query.task}"
+
+    def _render_preset_block(
+        self,
+        preset_name: Optional[str],
+        preset_template: Optional[str],
+        query: RetrievalQuery,
+        mode: PromptMode,
+        context: ExtractionContext
+    ) -> str:
+        template_text = (preset_template or "").strip()
+        if not template_text:
+            return ""
+        active_file_path = context.active_file.rel_path if context.active_file else query.active_file
+        try:
+            rendered = Environment().from_string(template_text).render(
+                goal=query.task,
+                task=query.task,
+                mode=mode.value,
+                active_file=active_file_path
+            ).strip()
+        except Exception:
+            rendered = template_text
+        if not rendered:
+            return ""
+        if preset_name:
+            return f"[Prompt Preset: {preset_name}]\n{rendered}"
+        return rendered
 
     def _build_rules(self, mode: PromptMode) -> str:
         base_rules = [

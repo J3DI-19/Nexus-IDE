@@ -53,12 +53,33 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId: existingSessio
       cursorBlink: true,
       convertEol: true,
       fontFamily: 'var(--font-mono)',
-      fontSize: 12,
+      fontSize: 13,
+      lineHeight: 1.35,
+      letterSpacing: 0.2,
+      scrollback: 8000,
+      allowTransparency: true,
       theme: {
-        background: '#101010',
-        foreground: '#d8d8d8',
-        cursor: '#d8d8d8',
-        selectionBackground: '#3a5f8a'
+        background: '#0b0f14',
+        foreground: '#d7e1f0',
+        cursor: '#8cc2ff',
+        cursorAccent: '#0b0f14',
+        selectionBackground: 'rgba(122, 162, 247, 0.28)',
+        black: '#1f2937',
+        red: '#f38ba8',
+        green: '#a6e3a1',
+        yellow: '#f9e2af',
+        blue: '#89b4fa',
+        magenta: '#cba6f7',
+        cyan: '#94e2d5',
+        white: '#cdd6f4',
+        brightBlack: '#6b7280',
+        brightRed: '#fda4af',
+        brightGreen: '#86efac',
+        brightYellow: '#fde68a',
+        brightBlue: '#93c5fd',
+        brightMagenta: '#d8b4fe',
+        brightCyan: '#99f6e4',
+        brightWhite: '#e5e7eb'
       }
     });
     const fitAddon = new FitAddon();
@@ -156,9 +177,28 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId: existingSessio
 
     start();
 
+    const handleProvenance = (event: Event) => {
+      const custom = event as CustomEvent<any>;
+      const detail = custom.detail || {};
+      const runtime = detail.runtime || 'runtime';
+      const source = detail.source || 'unknown';
+      const determinism = detail.determinism || 'unknown';
+      const runMode = detail.run_mode || 'direct';
+      const path = detail.path || 'unresolved';
+      const version = detail.version || '';
+      // Clear any partially-rendered prompt line before printing provenance block.
+      terminal.write('\x1b[2K\r');
+      terminal.writeln(`[runtime] ${String(runtime).toUpperCase()} | ${source} | ${determinism} | run=${runMode}`);
+      terminal.writeln(`[runtime] path: ${path}`);
+      if (version) terminal.writeln(`[runtime] version: ${version}`);
+      terminal.writeln('');
+    };
+    window.addEventListener('nexus-run-provenance', handleProvenance);
+
     return () => {
       disposed = true;
       closingIntentionally = true;
+      window.removeEventListener('nexus-run-provenance', handleProvenance);
       resizeObserver.disconnect();
       socketRef.current?.close();
       terminal.dispose();

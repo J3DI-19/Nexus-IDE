@@ -1,16 +1,44 @@
 import os
 import hashlib
-from typing import List, Set
+from pathlib import Path
+from typing import List
 
-# Shared ignore lists
+# Deterministic ignore directories for project scanning/indexing.
+# Keep this set centralized and extensible for future ignore config support.
 IGNORED_DIRS = {
-    "node_modules", ".git", "__pycache__", ".vscode", ".idea", 
-    "dist", "build", ".nexus", "venv", ".env"
+    ".git",
+    ".vscode",
+    ".idea",
+    ".nexus",
+    "node_modules",
+    "dist",
+    "build",
+    "out",
+    "coverage",
+    ".next",
+    ".gradle",
+    "venv",
+    "__pycache__",
+    "workspace",
+    "tmp",
+    ".cache",
 }
 IGNORED_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip", ".tar", ".gz",
     ".exe", ".bin", ".pyc", ".o", ".obj", ".dll", ".so", ".dylib", ".woff", ".woff2", ".ttf"
 }
+
+
+def _normalize_rel_path(path: str) -> str:
+    return path.replace("\\", "/").strip("/")
+
+
+def _should_exclude_rel_path(rel_path: str) -> bool:
+    normalized = _normalize_rel_path(rel_path)
+    if not normalized:
+        return False
+    parts = normalized.split("/")
+    return any(part in IGNORED_DIRS for part in parts)
 
 def fast_recursive_scan(root_path: str, include_dirs: bool = False) -> List[str]:
     """
@@ -18,29 +46,29 @@ def fast_recursive_scan(root_path: str, include_dirs: bool = False) -> List[str]
     Returns sorted list of relative paths.
     Directories are included with a trailing slash if include_dirs is True.
     """
-    file_list = []
+    root = Path(root_path).resolve()
+    file_list: List[str] = []
     
-    def _scan(current_dir):
+    def _scan(current_dir: Path):
         try:
             with os.scandir(current_dir) as entries:
                 for entry in entries:
-                    if entry.name.startswith(".") and entry.name != ".nexus" or entry.name in IGNORED_DIRS:
+                    rel_path = _normalize_rel_path(os.path.relpath(entry.path, root))
+                    if _should_exclude_rel_path(rel_path):
                         continue
-                    
+
                     if entry.is_dir(follow_symlinks=False):
                         if include_dirs:
-                            rel_path = os.path.relpath(entry.path, root_path)
-                            file_list.append(rel_path.replace("\\", "/") + "/")
-                        _scan(entry.path)
+                            file_list.append(rel_path + "/")
+                        _scan(Path(entry.path))
                     elif entry.is_file(follow_symlinks=False):
                         ext = os.path.splitext(entry.name)[1].lower()
                         if ext not in IGNORED_EXTENSIONS:
-                            rel_path = os.path.relpath(entry.path, root_path)
-                            file_list.append(rel_path.replace("\\", "/"))
+                            file_list.append(rel_path)
         except (PermissionError, OSError):
             pass
 
-    _scan(root_path)
+    _scan(root)
     return sorted(file_list)
 
 def compute_file_hash(file_path: str) -> str:

@@ -10,6 +10,10 @@ lerna-debug.log*
 # Node / frontend
 node_modules
 dist
+build
+out
+coverage
+.next/
 dist-ssr
 *.local
 
@@ -21,12 +25,15 @@ __pycache__/
 .env
 .env.*
 venv/
+.cache/
+.pytest_cache/
 
 # Project-specific
 workspace/
 *.patch
 *.diff
 tmp/
+.gradle/
 
 # Editor
 .vscode/*
