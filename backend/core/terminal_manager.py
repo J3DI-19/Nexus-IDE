@@ -46,7 +46,8 @@ def _quote_project_path(path: Path) -> str:
     try:
         rel = path.resolve().relative_to(root.resolve())
         if os.name == "nt":
-            return subprocess.list2cmdline([f".\\{str(rel).replace('/', '\\')}"])
+            rel_win = str(rel).replace("/", "\\")
+            return subprocess.list2cmdline([f".\\{rel_win}"])
         return shlex.quote(f"./{rel.as_posix()}")
     except Exception:
         return _quote(path)
@@ -111,6 +112,16 @@ def _find_nearest_csproj(start: Path, root: Path) -> Optional[Path]:
             break
         current = current.parent
     return None
+
+
+def _find_nearest_java_project_root(start: Path, root: Path) -> Path:
+    current = start.parent
+    while True:
+        if (current / "pom.xml").exists() or (current / "build.gradle").exists() or (current / "build.gradle.kts").exists():
+            return current
+        if current == root or current.parent == current:
+            return start.parent
+        current = current.parent
 
 
 def _runtime_version(executable: Path) -> Optional[str]:
@@ -187,6 +198,8 @@ def build_run_command(path: str) -> dict:
     if ext == ".ts":
         _, node_root = _set_runtime("node", "node/node.exe", "Node runtime is not available.")
         node_root_dir = node_root.parent
+        if not (node_root_dir / "node_modules").exists() and (node_root_dir / "node-install").exists():
+            node_root_dir = node_root_dir / "node-install"
         tsx = None
         if node_root_dir:
             tsx = _quote(node_root_dir / "node_modules" / ".bin" / ("tsx.cmd" if os.name == "nt" else "tsx"))
@@ -205,10 +218,36 @@ def build_run_command(path: str) -> dict:
             command = f"{ts_node} {quoted}"
             provenance["command"] = command
             return {"command": command, "provenance": provenance}
-        raise HTTPException(status_code=400, detail="TypeScript support is not available.")
+        command = f"{_quote_project_path(node_root)} {quoted}"
+        provenance["command"] = command
+        provenance["run_mode"] = "node-direct"
+        return {"command": command, "provenance": provenance}
     if ext == ".java":
-        java, _ = _set_runtime("java", "java/bin/java.exe", "Java runtime is not available.")
-        command = f"{java} {quoted}"
+        java, java_path = _set_runtime("java", "java/bin/java.exe", "Java runtime is not available.")
+        javac_path = java_path.parent / ("javac.exe" if os.name == "nt" else "javac")
+        if not javac_path.exists():
+            raise HTTPException(status_code=400, detail="Java compiler (javac) is not available.")
+        javac = _quote_project_path(javac_path)
+        project_root = get_project_root()
+        build_root = project_root / "backend" / ".nexus-java-runner"
+        root_hash = hashlib.sha1(str(file_path.parent).encode("utf-8")).hexdigest()
+        out_dir = build_root / root_hash
+        out_dir.mkdir(parents=True, exist_ok=True)
+        class_name = file_path.stem
+        java_project_root = _find_nearest_java_project_root(file_path, project_root)
+        if os.name == "nt":
+            source = _quote(file_path)
+            classpath = _quote(out_dir)
+            path_bin = _ps_single_quote(java_path.parent)
+            command = (
+                f"$env:PATH={path_bin} + ';' + $env:PATH; "
+                f"& {javac} -d {_quote(out_dir)} {source}; "
+                f"if ($LASTEXITCODE -eq 0) {{ & {java} -cp {classpath} {class_name} }}"
+            )
+        else:
+            command = f"{javac} -d {_quote(out_dir)} {_quote(file_path)} && {java} -cp {_quote(out_dir)} {class_name}"
+        provenance["run_mode"] = "compile-run"
+        provenance["working_directory"] = str(java_project_root)
         provenance["command"] = command
         return {"command": command, "provenance": provenance}
     if ext == ".c":

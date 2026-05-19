@@ -30,6 +30,7 @@ venv/
 
 # Project-specific
 workspace/
+languagetest/
 *.patch
 *.diff
 tmp/

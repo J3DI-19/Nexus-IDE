@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 import json
 from pathlib import Path
 from utils.security import get_project_root, is_safe_path
@@ -68,6 +68,65 @@ def _build_prompt_stats(prompt: str, context) -> Dict[str, int]:
         "prompt_tokens": _estimate_tokens(prompt)
     }
 
+def _build_selection_reason_lines(candidates: List[ContextCandidate], selected_files: List[str], limit: int = 8) -> List[str]:
+    by_path = {cand.file_metadata.rel_path: cand for cand in candidates}
+    lines: List[str] = []
+    for rel_path in selected_files:
+        cand = by_path.get(rel_path)
+        if not cand:
+            continue
+        top = sorted(cand.score_breakdown, key=lambda item: item.points, reverse=True)[:2]
+        factors = ", ".join(f"{comp.factor}({comp.points:.1f})" for comp in top) if top else "manual selection"
+        lines.append(f"{rel_path}: score={cand.score:.1f}; factors={factors}")
+        if len(lines) >= limit:
+            break
+    return lines
+
+def _build_selection_reason_lines_with_sources(
+    candidates: List[ContextCandidate],
+    selected_files: List[str],
+    selection_sources: Dict[str, str],
+    limit: int = 8
+) -> List[str]:
+    by_path = {cand.file_metadata.rel_path: cand for cand in candidates}
+    lines: List[str] = []
+    for rel_path in selected_files:
+        cand = by_path.get(rel_path)
+        if not cand:
+            continue
+        top = sorted(cand.score_breakdown, key=lambda item: item.points, reverse=True)[:2]
+        factors = ", ".join(f"{comp.factor}({comp.points:.1f})" for comp in top) if top else "manual selection"
+        source = selection_sources.get(rel_path, "auto")
+        lines.append(f"{rel_path}: source={source}; score={cand.score:.1f}; factors={factors}")
+        if len(lines) >= limit:
+            break
+    return lines
+
+def _validate_prompt_quality(
+    prompt: str,
+    mode: PromptMode,
+    stats: Dict[str, int],
+    active_slice_reasons: List[str],
+    selection_reasons: List[str],
+) -> Tuple[int, List[Dict[str, str]], List[Dict[str, str]]]:
+    checks: List[Dict[str, str]] = []
+    warnings: List[Dict[str, str]] = []
+    score = 100
+    def add_check(name: str, passed: bool, detail: str, severity: str = "medium"):
+        nonlocal score
+        checks.append({"name": name, "pass": passed, "detail": detail, "severity": severity})
+        if not passed:
+            score -= 20 if severity == "high" else 10
+    add_check("required_sections", all(s in prompt for s in ["### [SYSTEM RULES]", "### [PROJECT CONTEXT]", "### [TASK]"]), "Core sections must exist", "high")
+    if mode == PromptMode.ARCHITECTURE:
+        add_check("mode_contract", "structured analysis/briefing" in prompt and "ONLY a valid unified diff patch" not in prompt, "Architecture mode must use briefing contract", "high")
+    else:
+        add_check("mode_contract", "ONLY a valid unified diff patch" in prompt, "Patch modes must enforce unified diff contract", "high")
+    tokens = stats.get("prompt_tokens", 0)
+    add_check("token_budget", 150 <= tokens <= 8500, f"Prompt tokens within expected range ({tokens})", "medium")
+    add_check("anchor_quality", bool(active_slice_reasons), "Active file should contain at least one slice", "medium")
+    add_check("rationale_completeness", bool(selection_reasons), "Selection rationale should be present", "low")
+    return max(0, min(100, score)), checks, warnings
 
 def _load_prompt_preset(selected_preset_id: Optional[str]) -> Dict[str, str]:
     settings_path = get_project_root() / "backend" / "config" / "prompt_settings.json"
@@ -239,6 +298,8 @@ async def assemble_context(request: AssembleRequest):
         mode = PromptMode(request.mode) if request.mode else PromptMode.FEATURE
         
         candidates = []
+        selection_sources: Dict[str, str] = {}
+        user_forced_files: List[str] = []
         candidate_map = {
             cand.file_metadata.rel_path: cand
             for cand in (request.selected_candidates or [])
@@ -246,6 +307,7 @@ async def assemble_context(request: AssembleRequest):
         for rel_path in request.selected_files:
             if rel_path in candidate_map:
                 candidates.append(candidate_map[rel_path])
+                selection_sources[rel_path] = "auto_selected"
                 continue
 
             metadata = pipeline.index.get_file_metadata(rel_path)
@@ -265,6 +327,8 @@ async def assemble_context(request: AssembleRequest):
                 matched_symbols=[s.name for s in symbols],
                 matched_artifacts=[a.artifact_type for a in artifacts]
             ))
+            selection_sources[rel_path] = "user_forced"
+            user_forced_files.append(rel_path)
         
         context = pipeline.extraction.extract_context(
             query.active_file, 
@@ -298,6 +362,7 @@ async def assemble_context(request: AssembleRequest):
             
         runtime_artifacts = pipeline.runtime.get_active_artifacts()
         selected_preset = _load_prompt_preset(request.selected_preset_id)
+        selection_reason_lines = _build_selection_reason_lines_with_sources(candidates, request.selected_files, selection_sources)
         prompt = pipeline.prompt_builder.build_prompt(
             query,
             context,
@@ -306,8 +371,62 @@ async def assemble_context(request: AssembleRequest):
             runtime_artifacts=runtime_artifacts,
             preset_name=selected_preset.get("name"),
             preset_template=selected_preset.get("template"),
+            selection_reasons=selection_reason_lines,
         )
-        return {"prompt": prompt, "stats": _build_prompt_stats(prompt, context)}
+        stats = _build_prompt_stats(prompt, context)
+        active_reasons = [s.reason for s in (context.active_file.slices if context.active_file else [])]
+        quality_score, quality_checks, warnings = _validate_prompt_quality(prompt, mode, stats, active_reasons, selection_reason_lines)
+
+        low_auto = [c.file_metadata.rel_path for c in candidates if c.score < 15 and selection_sources.get(c.file_metadata.rel_path) == "auto_selected"]
+        low_forced = [c.file_metadata.rel_path for c in candidates if c.score < 15 and selection_sources.get(c.file_metadata.rel_path) == "user_forced"]
+        for path in low_auto:
+            warnings.append({"code": "low_signal_auto_selected", "message": "Low-signal auto-selected file.", "file": path, "source": "auto_selected"})
+        for path in low_forced:
+            warnings.append({"code": "low_signal_user_forced", "message": "Low-signal user-forced file preserved.", "file": path, "source": "user_forced"})
+
+        fallback_applied = False
+        if quality_score < 70 and low_auto:
+            fallback_applied = True
+            filtered_candidates = [c for c in candidates if not (selection_sources.get(c.file_metadata.rel_path) == "auto_selected" and c.score < 15)]
+            fallback_context = pipeline.extraction.extract_context(
+                query.active_file,
+                filtered_candidates,
+                mode=mode.value,
+                runtime=pipeline.runtime,
+                full_file_overrides=request.full_file_overrides,
+            )
+            fallback_prompt = pipeline.prompt_builder.build_prompt(
+                query,
+                fallback_context,
+                impact=impact_result,
+                mode=mode,
+                runtime_artifacts=runtime_artifacts,
+                preset_name=selected_preset.get("name"),
+                preset_template=selected_preset.get("template"),
+                selection_reasons=_build_selection_reason_lines_with_sources(filtered_candidates, request.selected_files, selection_sources),
+            )
+            fallback_stats = _build_prompt_stats(fallback_prompt, fallback_context)
+            fallback_active = [s.reason for s in (fallback_context.active_file.slices if fallback_context.active_file else [])]
+            fallback_score, fallback_checks, fallback_warnings = _validate_prompt_quality(
+                fallback_prompt, mode, fallback_stats, fallback_active, selection_reason_lines
+            )
+            if fallback_score >= quality_score:
+                prompt = fallback_prompt
+                context = fallback_context
+                stats = fallback_stats
+                quality_score = fallback_score
+                quality_checks = fallback_checks
+                warnings.extend(fallback_warnings)
+
+        return {
+            "prompt": prompt,
+            "stats": stats,
+            "quality_score": quality_score,
+            "quality_checks": quality_checks,
+            "warnings": warnings,
+            "fallback_applied": fallback_applied,
+            "user_forced_files": user_forced_files,
+        }
     except Exception as e:
         print(f"ASSEMBLY ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))

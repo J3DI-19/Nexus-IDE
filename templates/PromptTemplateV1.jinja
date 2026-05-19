@@ -3,10 +3,26 @@
 ### [SYSTEM RULES]
 
 {{ rules }}
+If required context is missing, ask for specific file/symbol slices before patching.
 
 ---
 
 ### [PROJECT CONTEXT]
+Current File: {{ active_file_path or "N/A" }}
+
+{% if project_hierarchy_compact %}
+Project Hierarchy (compact):
+```
+{{ project_hierarchy_compact }}
+```
+{% endif %}
+
+{% if top_selection_reasons %}
+Selection Rationale:
+{% for item in top_selection_reasons %}
+- {{ item }}
+{% endfor %}
+{% endif %}
 
 {% if warnings %}
 ### [CRITICAL WARNINGS & CONSTRAINTS]
@@ -44,4 +60,4 @@ No active runtime errors.
 Goal: {{ task }}
 Modify ONLY what is necessary to achieve this goal. Avoid unrelated changes.
 
-Follow ALL rules strictly. Your response must be ONLY a valid unified diff patch.
+Follow ALL rules strictly. {{ response_contract }}

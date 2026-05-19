@@ -495,6 +495,155 @@
   background: rgba(255, 255, 255, 0.02);
 }
 
+.runtime-installer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.runtime-installer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.runtime-preflight-chip {
+  margin: 6px 0 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.runtime-preflight-chip.ok {
+  color: #b9f5cd;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.28);
+}
+
+.runtime-preflight-chip.warn {
+  color: #ffd6a3;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.runtime-installer-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.runtime-installer-link {
+  border: none;
+  background: transparent;
+  color: #cdb1ff;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+
+.runtime-installer-link:hover {
+  color: #e0cbff;
+}
+
+.runtime-installer-link.subtle {
+  color: rgba(205, 177, 255, 0.82);
+  font-weight: 600;
+}
+
+.runtime-installer-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.12s ease;
+}
+
+.runtime-installer-row:hover {
+  border-color: rgba(162, 119, 255, 0.35);
+  background: rgba(162, 119, 255, 0.08);
+}
+
+.runtime-installer-row.selected {
+  border-color: rgba(162, 119, 255, 0.52);
+  background: rgba(162, 119, 255, 0.14);
+}
+
+.runtime-installer-check {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.runtime-installer-check.on {
+  color: #ffffff;
+  border-color: rgba(162, 119, 255, 0.7);
+  background: rgba(162, 119, 255, 0.5);
+}
+
+.runtime-installer-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.runtime-installer-status {
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+}
+
+.runtime-installer-status.installed {
+  color: #a8f5bf;
+  border-color: rgba(130, 230, 160, 0.45);
+}
+
+.runtime-installer-status.not_installed {
+  color: #f6d68b;
+  border-color: rgba(246, 214, 139, 0.45);
+}
+
+.runtime-installer-status.failed {
+  color: #f9a1a1;
+  border-color: rgba(249, 161, 161, 0.45);
+}
+
+.runtime-installer-status.update_available {
+  color: #9ec0ff;
+  border-color: rgba(158, 192, 255, 0.45);
+}
+
+.runtime-installer-version {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.runtime-installer-progress {
+  grid-column: 2 / -1;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 .runtime-setting-meta {
   display: flex;
   flex-direction: column;

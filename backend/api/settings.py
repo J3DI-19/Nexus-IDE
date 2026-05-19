@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter
 
 from core.runtime_registry import RuntimeConfig, runtime_registry
+from core.runtime_installer import runtime_installer
 from utils.security import get_project_root
 
 router = APIRouter()
@@ -19,6 +20,11 @@ class RuntimeSettingsRequest(BaseModel):
     dotnet: str | None = None
     bash: str | None = None
     powershell: str | None = None
+
+
+class RuntimeInstallRequest(BaseModel):
+    runtimes: list[str] = []
+    reinstall: bool = False
 
 
 class PromptPreset(BaseModel):
@@ -105,9 +111,9 @@ async def get_runtime_settings():
         "java": "java/bin/java.exe",
         "gcc": "gcc/bin/gcc.exe",
         "gpp": "gcc/bin/g++.exe",
-        "dotnet": "dotnet/sdk/csc.exe",
-        "bash": "bash/bin/bash.exe",
-        "powershell": "powershell/bin/powershell.exe",
+        "dotnet": "dotnet/dotnet.exe",
+        "bash": "bash/usr/bin/bash.exe",
+        "powershell": "powershell/7/pwsh.exe",
     }
     payload = current.__dict__.copy()
     changed = False
@@ -132,6 +138,33 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
 @router.get("/settings/runtimes/diagnostics")
 async def get_runtime_diagnostics():
     return runtime_registry.runtime_status()
+
+
+@router.get("/settings/runtimes/catalog")
+async def get_runtime_catalog():
+    return runtime_installer.get_catalog()
+
+
+@router.get("/settings/runtimes/preflight")
+async def get_runtime_preflight():
+    return runtime_installer.get_preflight()
+
+
+@router.post("/settings/runtimes/install")
+async def install_runtimes(request: RuntimeInstallRequest):
+    job_id = runtime_installer.create_install_job(request.runtimes, reinstall=request.reinstall)
+    return {"status": "accepted", "job_id": job_id}
+
+
+@router.get("/settings/runtimes/install/{job_id}")
+async def get_runtime_install_job(job_id: str):
+    return runtime_installer.get_job(job_id)
+
+
+@router.post("/settings/runtimes/update")
+async def update_runtimes(request: RuntimeInstallRequest):
+    job_id = runtime_installer.create_install_job(request.runtimes, reinstall=True)
+    return {"status": "accepted", "job_id": job_id}
 
 
 @router.get("/settings/prompts")

@@ -1,5 +1,6 @@
 import os
-from typing import List, Optional, Dict, Any
+from pathlib import Path
+from typing import List, Optional, Dict, Any, Set
 from jinja2 import Environment, FileSystemLoader
 from ..extraction.models import ExtractionContext, ExtractedFile, CodeSlice
 from ..retrieval.models import RetrievalQuery
@@ -35,7 +36,8 @@ class AdvancedPromptBuilder:
         mode: PromptMode = PromptMode.FEATURE,
         runtime_artifacts: Optional[List[RuntimeArtifact]] = None,
         preset_name: Optional[str] = None,
-        preset_template: Optional[str] = None
+        preset_template: Optional[str] = None,
+        selection_reasons: Optional[List[str]] = None,
     ) -> str:
         """
         Orchestrates prompt composition using Jinja2 and adaptive token balancing.
@@ -94,6 +96,12 @@ class AdvancedPromptBuilder:
                 template_name = "PromptTemplateV1.jinja"
                 
             template = self.env.get_template(template_name)
+            active_file_path = context.active_file.rel_path if context.active_file else query.active_file
+            hierarchy_block = self._build_project_hierarchy_compact(
+                active_file=active_file_path,
+                related_files=[f.rel_path for f in context.related_files]
+            )
+            selection_reason_lines = selection_reasons or self._build_top_selection_reasons(context.related_files)
             
             base_prompt = template.render(
                 mode=mode.value,
@@ -102,7 +110,11 @@ class AdvancedPromptBuilder:
                 runtime_diagnostics=runtime_content,
                 active_file=active_file_content,
                 related_context="\n\n".join(related_sections),
-                rules=self._build_rules(mode)
+                rules=self._build_rules(mode),
+                response_contract=self._response_contract(mode),
+                active_file_path=active_file_path,
+                project_hierarchy_compact=hierarchy_block,
+                top_selection_reasons=selection_reason_lines,
             )
             preset_block = self._render_preset_block(
                 preset_name=preset_name,
@@ -145,12 +157,23 @@ class AdvancedPromptBuilder:
         return rendered
 
     def _build_rules(self, mode: PromptMode) -> str:
+        if mode == PromptMode.ARCHITECTURE:
+            return "\n".join([
+                "You are a deterministic engineering analysis assistant.",
+                "STRICT RULES:",
+                "* Output a concise, structured architecture/engineering briefing.",
+                "* Do NOT output a unified diff patch for this task type.",
+                "* Preserve exact existing styles, imports, and framework conventions in any referenced code.",
+            ])
+
         base_rules = [
             "You are a deterministic code modification engine.",
             "STRICT RULES:",
             "* Output ONLY a valid unified diff patch.",
             "* Do NOT include conversational text or markdown outside the diff.",
-            "* Preserve exact existing styles, imports, and framework conventions."
+            "* Preserve exact existing styles, imports, and framework conventions.",
+            "* Patch format MUST include standard unified diff markers ('---', '+++', '@@').",
+            "* If a safe patch cannot be produced from provided context, output an empty diff."
         ]
         
         if mode == PromptMode.REFACTOR:
@@ -159,6 +182,11 @@ class AdvancedPromptBuilder:
             base_rules.append("* Prioritize minimal, targeted surgical changes to resolve the issue.")
             
         return "\n".join(base_rules)
+
+    def _response_contract(self, mode: PromptMode) -> str:
+        if mode == PromptMode.ARCHITECTURE:
+            return "Respond with a concise structured analysis/briefing (not a patch)."
+        return "Your response must be ONLY a valid unified diff patch."
 
     def _build_file_section(self, file: ExtractedFile, balancer: TokenBalancer, is_active: bool = False) -> str:
         header = f"File: `{file.rel_path}` ({file.classification.upper()})"
@@ -197,3 +225,53 @@ class AdvancedPromptBuilder:
                 lines.append(f"\n[Code Slice: {s.reason} | OMITTED DUE TO TOKEN BUDGET]")
         
         return "\n".join(lines)
+
+    def _build_top_selection_reasons(self, related_files: List[ExtractedFile], limit: int = 8) -> List[str]:
+        reasons: List[str] = []
+        for rel_file in related_files[:limit]:
+            reason_text = rel_file.reason or ""
+            reasons.append(f"{rel_file.rel_path}: {reason_text}")
+        return reasons
+
+    def _build_project_hierarchy_compact(self, active_file: Optional[str], related_files: List[str], max_lines: int = 40) -> str:
+        paths: Set[str] = set()
+        if active_file:
+            paths.add(active_file)
+        paths.update(related_files or [])
+        if not paths:
+            return ""
+
+        root = Path(self.env.loader.searchpath[0]).resolve().parent
+        tree: Dict[str, Any] = {}
+        for rel in sorted(paths):
+            normalized = rel.replace("\\", "/").strip("/")
+            if not normalized:
+                continue
+            parts = normalized.split("/")[:3]
+            node = tree
+            for part in parts:
+                node = node.setdefault(part, {})
+
+        lines: List[str] = [str(root.name)]
+
+        def walk(node: Dict[str, Any], prefix: str = ""):
+            for idx, key in enumerate(sorted(node.keys())):
+                is_last = idx == len(node) - 1
+                connector = "└── " if is_last else "├── "
+                lines.append(f"{prefix}{connector}{key}")
+                if len(lines) >= max_lines:
+                    return
+                next_prefix = f"{prefix}{'    ' if is_last else '│   '}"
+                walk(node[key], next_prefix)
+                if len(lines) >= max_lines:
+                    return
+
+        walk(tree)
+        if len(lines) >= max_lines:
+            lines.append("... (truncated)")
+
+        markers = []
+        if active_file:
+            markers.append(f"* active: {active_file}")
+        markers.extend([f"* related: {path}" for path in related_files[:6]])
+        return "\n".join(lines + [""] + markers)

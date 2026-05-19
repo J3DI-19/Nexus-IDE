@@ -6,6 +6,25 @@ from ..models.symbol import Symbol
 from ..index.manager import IndexManager
 from ..runtime.analyzer import RuntimeAnalyzer
 
+QUERY_SYNONYMS = {
+    "route": {"routing", "router", "routes"},
+    "response": {"responses", "encoder", "encoders"},
+    "schema": {"openapi", "model", "models", "params", "param"},
+    "parameter": {"param", "params", "field"},
+    "blueprint": {"blueprints", "scaffold", "register"},
+    "context": {"ctx", "globals", "request"},
+}
+
+def _normalized_query_terms(task: str) -> List[str]:
+    raw = task.lower().replace("-", " ").replace("_", " ").split()
+    terms = set(raw)
+    for token in raw:
+        terms.update(QUERY_SYNONYMS.get(token, set()))
+        for key, values in QUERY_SYNONYMS.items():
+            if token in values:
+                terms.add(key)
+    return [term for term in terms if len(term) > 2]
+
 class SymbolScorer:
     def __init__(self, index: IndexManager):
         self.index = index
@@ -85,29 +104,34 @@ class SymbolScorer:
         return None
 
     def _score_name(self, query: RetrievalQuery, symbol: Symbol) -> Optional[ScoreComponent]:
-        task_words = set(query.task.lower().replace("_", " ").replace("-", " ").split())
+        task_words = set(_normalized_query_terms(query.task))
         sym_name_lower = symbol.name.lower()
+        weak_terms = {"service", "controller", "model", "route", "routes", "handler", "helper", "utils", "doc", "docs"}
         
         for word in task_words:
-            if len(word) > 3 and word in sym_name_lower:
+            if len(word) <= 3 or word in weak_terms:
+                continue
+            if word in sym_name_lower:
                 return ScoreComponent(
                     factor="Symbol Name Similarity",
-                    points=40.0,
+                    points=18.0,
                     reason=f"Symbol name contains task keyword: '{word}'"
                 )
         return None
 
     def _score_intent(self, query: RetrievalQuery, symbol: Symbol) -> Optional[ScoreComponent]:
         task_lower = query.task.lower()
+        query_terms = set(_normalized_query_terms(query.task))
         sym_name_lower = symbol.name.lower()
         
         # Action-based intent matching
-        actions = ["validate", "check", "parse", "process", "calculate", "save", "fetch", "render", "handle"]
+        actions = ["validate", "check", "parse", "process", "calculate", "save", "fetch", "render", "handle", "map", "transform", "normalize", "extract"]
         for action in actions:
-            if action in task_lower and action in sym_name_lower:
+            if (action in task_lower or action in query_terms) and action in sym_name_lower:
+                weight = 42.0 if query.mode == "refactor" and action in {"validate", "parse", "map", "transform", "normalize", "extract"} else 35.0
                 return ScoreComponent(
                     factor="Symbol Intent Match",
-                    points=35.0,
+                    points=weight,
                     reason=f"Symbol matches action '{action}' in task"
                 )
         return None

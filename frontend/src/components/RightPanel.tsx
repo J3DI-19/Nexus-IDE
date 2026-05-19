@@ -63,9 +63,40 @@ interface RuntimeDiagnosticsMap {
   [key: string]: {
     configured: string | null;
     resolved: string | null;
+    bundled_path?: string | null;
+    bundled_installed?: boolean;
     source: 'configured' | 'bundled' | 'system' | 'missing';
   };
 }
+interface RuntimeCatalogItem {
+  key: string;
+  label: string;
+  version: string;
+  status: 'not_installed' | 'installing' | 'installed' | 'failed' | 'update_available';
+  resolved?: string | null;
+  source?: string | null;
+  bundled_installed?: boolean;
+}
+interface RuntimeInstallJobItem {
+  runtime: string;
+  status: string;
+  progress: number;
+  message: string;
+  installed_version?: string | null;
+  target_version?: string | null;
+}
+interface RuntimePreflight {
+  ok: boolean;
+  checks: Record<string, { ok: boolean; message: string }>;
+}
+
+const runtimeStatusOrder: Record<RuntimeCatalogItem['status'], number> = {
+  failed: 0,
+  not_installed: 1,
+  update_available: 2,
+  installing: 3,
+  installed: 4,
+};
 
 const scoreManualMatch = (query: string, file: { path: string; name: string }) => {
   const q = query.trim().toLowerCase();
@@ -161,6 +192,12 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsFlash, setSettingsFlash] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<RuntimeDiagnosticsMap>({});
+  const [runtimeCatalog, setRuntimeCatalog] = useState<RuntimeCatalogItem[]>([]);
+  const [selectedRuntimeKeys, setSelectedRuntimeKeys] = useState<Set<string>>(new Set());
+  const [runtimeInstallJobId, setRuntimeInstallJobId] = useState<string | null>(null);
+  const [runtimeInstallItems, setRuntimeInstallItems] = useState<Record<string, RuntimeInstallJobItem>>({});
+  const [runtimeInstallerBusy, setRuntimeInstallerBusy] = useState(false);
+  const [runtimePreflight, setRuntimePreflight] = useState<RuntimePreflight | null>(null);
   const [promptPresets, setPromptPresets] = useState<PromptPreset[]>([]);
   const [selectedPromptPresetId, setSelectedPromptPresetId] = useState('default');
   const [newPresetName, setNewPresetName] = useState('My Prompt Preset');
@@ -178,6 +215,15 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
   const runtimeFetchQueued = useRef(false);
   const diagnosticsVersionRef = useRef(0);
   const selectedPreset = promptPresets.find((preset) => preset.id === selectedPromptPresetId) || promptPresets[0];
+  const sortedRuntimeCatalog = useMemo(
+    () =>
+      [...runtimeCatalog].sort((a, b) => {
+        const diff = runtimeStatusOrder[a.status] - runtimeStatusOrder[b.status];
+        if (diff !== 0) return diff;
+        return a.label.localeCompare(b.label);
+      }),
+    [runtimeCatalog]
+  );
 
   useEffect(() => {
     if (!selectedPreset) return;
@@ -186,7 +232,14 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     setEditPresetTemplate(selectedPreset.isDefault ? '' : (selectedPreset.template || ''));
   }, [selectedPreset?.id]);
 
-  const openRuntimeSettings = () => setRuntimeSettingsOpen(true);
+  const openRuntimeSettings = () => {
+    setRuntimeSettingsOpen(true);
+    void fetchRuntimeSettings();
+    void fetchRuntimeDiagnostics();
+    void fetchRuntimeCatalog();
+    void fetchRuntimePreflight();
+    void fetchPromptSettings();
+  };
 
   const fetchContextStatus = useCallback(async () => {
     try {
@@ -255,6 +308,33 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
       setRuntimeDiagnostics(data || {});
     } catch (err) {
       console.error('Runtime diagnostics fetch failed', err);
+    }
+  }, []);
+
+  const fetchRuntimeCatalog = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/settings/runtimes/catalog`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const items: RuntimeCatalogItem[] = Array.isArray(data.runtimes) ? data.runtimes : [];
+      setRuntimeCatalog(items);
+      if (selectedRuntimeKeys.size === 0) {
+        const missing = items.filter((it) => it.status !== 'installed').map((it) => it.key);
+        setSelectedRuntimeKeys(new Set(missing));
+      }
+    } catch (err) {
+      console.error('Runtime catalog fetch failed', err);
+    }
+  }, [selectedRuntimeKeys.size]);
+
+  const fetchRuntimePreflight = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/settings/runtimes/preflight`);
+      if (!res.ok) return;
+      const data: RuntimePreflight = await res.json();
+      setRuntimePreflight(data);
+    } catch (err) {
+      console.error('Runtime preflight fetch failed', err);
     }
   }, []);
 
@@ -378,6 +458,8 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     fetchRuntime();
     fetchRuntimeSettings();
     fetchRuntimeDiagnostics();
+    fetchRuntimeCatalog();
+    fetchRuntimePreflight();
     fetchPromptSettings();
 
     // Background polling for runtime telemetry (VS Code-like reactive behavior)
@@ -394,7 +476,58 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
       clearInterval(runtimeInterval);
       window.removeEventListener('nexus-runtime-updated', handleRuntimeUpdated);
     };
-  }, [fetchContextStatus, fetchPromptSettings, fetchRuntime, fetchRuntimeDiagnostics, fetchRuntimeSettings, isProjectLoaded, resetWorkflowState]);
+  }, [fetchContextStatus, fetchPromptSettings, fetchRuntime, fetchRuntimeCatalog, fetchRuntimeDiagnostics, fetchRuntimeSettings, isProjectLoaded, resetWorkflowState, fetchRuntimePreflight]);
+
+  const startRuntimeInstall = useCallback(async (mode: 'install' | 'update', runtimes: string[], reinstall: boolean) => {
+    setRuntimeInstallerBusy(true);
+    try {
+      const endpoint = mode === 'update' ? '/settings/runtimes/update' : '/settings/runtimes/install';
+      const res = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runtimes, reinstall }),
+      });
+      if (!res.ok) throw new Error('Failed to start runtime install');
+      const data = await res.json();
+      setRuntimeInstallJobId(data.job_id);
+      setSettingsFlash({ type: 'success', message: 'Installation started' });
+    } catch (err) {
+      console.error(err);
+      setSettingsFlash({ type: 'error', message: 'Could not start runtime install' });
+      setRuntimeInstallerBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!runtimeInstallJobId) return;
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/settings/runtimes/install/${runtimeInstallJobId}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        setRuntimeInstallItems(data.items || {});
+        if (data.status === 'completed' || data.status === 'failed') {
+          setRuntimeInstallerBusy(false);
+          setRuntimeInstallJobId(null);
+          await fetchRuntimeSettings();
+          await fetchRuntimeDiagnostics();
+          await fetchRuntimeCatalog();
+          await fetchRuntimePreflight();
+          setSettingsFlash({
+            type: data.status === 'completed' ? 'success' : 'error',
+            message: data.status === 'completed' ? 'Runtime install finished' : `Runtime install failed: ${data.error || 'Check item status'}`
+          });
+        }
+      } catch (err) {
+        console.error('Runtime install polling failed', err);
+      }
+    }, 1200);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [runtimeInstallJobId, fetchRuntimeCatalog, fetchRuntimeDiagnostics, fetchRuntimeSettings, fetchRuntimePreflight]);
 
   const initializeContext = async () => {
     if (!isProjectLoaded) return;
@@ -948,6 +1081,104 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                 </div>
 
                 <div className="settings-grid">
+                <div className="settings-panel full-span">
+                  <div className="settings-panel-title">Runtime Installer</div>
+                  <div className="settings-panel-copy">Select runtimes and install in one click. Status is refreshed automatically whenever this panel opens.</div>
+                  {runtimePreflight && (
+                    <div className={`runtime-preflight-chip ${runtimePreflight.ok ? 'ok' : 'warn'}`}>
+                      {runtimePreflight.ok
+                        ? 'Ready: installer prerequisites look good.'
+                        : `Needs attention: ${Object.values(runtimePreflight.checks).find((c) => !c.ok)?.message || 'Check preflight.'}`}
+                    </div>
+                  )}
+                  <div className="runtime-installer-toolbar">
+                    <button
+                      className="runtime-installer-link"
+                      onClick={() => { void fetchRuntimeCatalog(); void fetchRuntimePreflight(); }}
+                      disabled={runtimeInstallerBusy}
+                      type="button"
+                    >
+                      Refresh status
+                    </button>
+                    <div className="runtime-installer-toolbar-actions">
+                      <button
+                        className="runtime-installer-link subtle"
+                        onClick={() => {
+                          const missing = sortedRuntimeCatalog
+                            .filter((item) => item.status !== 'installed')
+                            .map((item) => item.key);
+                          setSelectedRuntimeKeys(new Set(missing));
+                        }}
+                        disabled={runtimeInstallerBusy}
+                        type="button"
+                      >
+                        Select missing
+                      </button>
+                      <button
+                        className="runtime-installer-link subtle"
+                        onClick={() => setSelectedRuntimeKeys(new Set())}
+                        disabled={runtimeInstallerBusy || selectedRuntimeKeys.size === 0}
+                        type="button"
+                      >
+                        Clear
+                      </button>
+                      <span>{selectedRuntimeKeys.size} selected</span>
+                    </div>
+                  </div>
+                  <div className="runtime-installer-list">
+                    {sortedRuntimeCatalog.map((item) => {
+                      const checked = selectedRuntimeKeys.has(item.key);
+                      const jobItem = runtimeInstallItems[item.key];
+                      return (
+                        <button
+                          key={item.key}
+                          className={`runtime-installer-row ${checked ? 'selected' : ''}`}
+                          onClick={() => {
+                            setSelectedRuntimeKeys((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.key)) next.delete(item.key);
+                              else next.add(item.key);
+                              return next;
+                            });
+                          }}
+                          type="button"
+                        >
+                          <span className={`runtime-installer-check ${checked ? 'on' : ''}`}>{checked ? '✓' : ''}</span>
+                          <span className="runtime-installer-name">{item.label}</span>
+                          <span className={`runtime-installer-status ${item.status}`}>{item.status}</span>
+                          <span className="runtime-installer-version">v{item.version}</span>
+                          {jobItem && <span className="runtime-installer-progress">{jobItem.progress}% · {jobItem.message}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="settings-actions compact">
+                    <button
+                      className="modal-btn modal-btn-cancel"
+                      onClick={() => { void startRuntimeInstall('install', Array.from(selectedRuntimeKeys), false); }}
+                      disabled={runtimeInstallerBusy || selectedRuntimeKeys.size === 0}
+                      type="button"
+                    >
+                      Install Selected
+                    </button>
+                    <button
+                      className="modal-btn modal-btn-cancel"
+                      onClick={() => { void startRuntimeInstall('install', sortedRuntimeCatalog.map((r) => r.key), false); }}
+                      disabled={runtimeInstallerBusy}
+                      type="button"
+                    >
+                      Install All
+                    </button>
+                    <button
+                      className="modal-btn modal-btn-confirm default"
+                      onClick={() => { void startRuntimeInstall('update', Array.from(selectedRuntimeKeys), true); }}
+                      disabled={runtimeInstallerBusy || selectedRuntimeKeys.size === 0}
+                      type="button"
+                    >
+                      Update Selected
+                    </button>
+                  </div>
+                </div>
                 {[
                   { key: 'python', label: 'Python', placeholder: 'backend/runtimes/python/python.exe' },
                   { key: 'node', label: 'Node.js', placeholder: 'backend/runtimes/node/node.exe' },
@@ -967,6 +1198,11 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                           <> · {runtimeDiagnostics[runtime.key].source}</>
                         )}
                       </span>
+                      {runtimeDiagnostics[runtime.key]?.bundled_installed !== undefined && (
+                        <span className="runtime-setting-hint">
+                          {runtimeDiagnostics[runtime.key]?.bundled_installed ? 'Bundled installed' : 'Bundled missing'}
+                        </span>
+                      )}
                       {runtimeDiagnostics[runtime.key]?.resolved && (
                         <span className="runtime-setting-hint">{runtimeDiagnostics[runtime.key].resolved}</span>
                       )}

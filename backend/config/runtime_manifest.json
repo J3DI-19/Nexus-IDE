@@ -1,0 +1,68 @@
+﻿{
+    "runtimes":  {
+                     "python":  {
+                                    "label":  "Python",
+                                    "version":  "3.12.4",
+                                    "windows":  {
+                                                    "url":  "https://www.python.org/ftp/python/3.12.4/python-3.12.4-embed-amd64.zip",
+                                                    "sha256":  "15fea3c9367653a85086fe37216b4d1a1c78688fa5e1587e1db0b0f658856564"
+                                                }
+                                },
+                     "node":  {
+                                  "label":  "Node.js",
+                                  "version":  "20.15.1",
+                                  "windows":  {
+                                                  "url":  "https://nodejs.org/dist/v20.15.1/node-v20.15.1-win-x64.zip",
+                                                  "sha256":  "ba6c3711e2c3d0638c5f7cea3c234553808a73c52a5962a6cdb47b5210b70b04"
+                                              }
+                              },
+                     "java":  {
+                                  "label":  "Java",
+                                  "version":  "23.0.1",
+                                  "windows":  {
+                                                  "url":  "https://github.com/adoptium/temurin23-binaries/releases/download/jdk-23.0.1%2B11/OpenJDK23U-jdk_x64_windows_hotspot_23.0.1_11.zip",
+                                                  "sha256":  "eb1bc62060f17566b160fae8ce876ada5d639e2fd4781009a1219e971b9937dd"
+                                              }
+                              },
+                     "gcc":  {
+                                 "label":  "GCC",
+                                 "version":  "13.2.0",
+                                 "windows":  {
+                                                 "url":  "https://github.com/niXman/mingw-builds-binaries/releases/download/13.2.0-rt_v11-rev1/x86_64-13.2.0-release-posix-seh-ucrt-rt_v11-rev1.7z",
+                                                 "sha256":  "475ee72c5ce1bd54a3e3c334bdd3be5e6575334184fd9718013aa362c9819d2f"
+                                             }
+                             },
+                     "gpp":  {
+                                 "label":  "G++",
+                                 "version":  "13.2.0",
+                                 "windows":  {
+                                                 "url":  "https://github.com/niXman/mingw-builds-binaries/releases/download/13.2.0-rt_v11-rev1/x86_64-13.2.0-release-posix-seh-ucrt-rt_v11-rev1.7z",
+                                                 "sha256":  "475ee72c5ce1bd54a3e3c334bdd3be5e6575334184fd9718013aa362c9819d2f"
+                                             }
+                             },
+                     "dotnet":  {
+                                    "label":  ".NET",
+                                    "version":  "8.0.7",
+                                    "windows":  {
+                                                    "url":  "https://aka.ms/dotnet/8.0/dotnet-sdk-win-x64.zip",
+                                                    "sha256":  "a47de53be94e2e4886c7e27b798acd0526110595a9598a94ae91b329526052d3"
+                                                }
+                                },
+                     "bash":  {
+                                  "label":  "Bash",
+                                  "version":  "2.0.0",
+                                  "windows":  {
+                                                  "url":  "https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/MinGit-2.45.2-64-bit.zip",
+                                                  "sha256":  "7ed2a3ce5bbbf8eea976488de5416894ca3e6a0347cee195a7d768ac146d5290"
+                                              }
+                              },
+                     "powershell":  {
+                                        "label":  "PowerShell",
+                                        "version":  "7.4.15",
+                                        "windows":  {
+                                                        "url":  "https://github.com/PowerShell/PowerShell/releases/download/v7.4.15/PowerShell-7.4.15-win-x64.zip",
+                                                        "sha256":  "35062c73f5b58b207f34451de28a1a7741ed4c2691a418defee23537d4aa8b68"
+                                                    }
+                                    }
+                 }
+}

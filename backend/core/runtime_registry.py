@@ -30,6 +30,16 @@ class RuntimeResolution:
 
 
 class RuntimeRegistry:
+    RUNTIME_BUNDLED_PATHS = {
+        "python": "python/python.exe",
+        "node": "node/node.exe",
+        "java": "java/bin/java.exe",
+        "gcc": "gcc/bin/gcc.exe",
+        "gpp": "gcc/bin/g++.exe",
+        "dotnet": "dotnet/dotnet.exe",
+        "bash": "bash/usr/bin/bash.exe",
+        "powershell": "powershell/7/pwsh.exe",
+    }
     RUNTIME_EXECUTABLE_NAMES = {
         "python": ["python", "python3"],
         "node": ["node"],
@@ -65,15 +75,15 @@ class RuntimeRegistry:
 
     def resolve_with_metadata(self, key: str, bundled_relpath: str) -> RuntimeResolution:
         config = self.load()
+        bundled = self.bundle_root / bundled_relpath
+        if bundled.exists():
+            return RuntimeResolution(key=key, path=bundled, source="bundled", determinism="deterministic")
+
         user_path = getattr(config, key, None)
         if user_path:
             path = Path(user_path)
             if path.exists():
                 return RuntimeResolution(key=key, path=path, source="configured", determinism="deterministic")
-
-        bundled = self.bundle_root / bundled_relpath
-        if bundled.exists():
-            return RuntimeResolution(key=key, path=bundled, source="bundled", determinism="deterministic")
 
         # Last fallback: use host runtime if present in PATH.
         for executable in self.RUNTIME_EXECUTABLE_NAMES.get(key, []):
@@ -85,26 +95,20 @@ class RuntimeRegistry:
         return RuntimeResolution(key=key, path=None, source="missing", determinism="unresolved")
 
     def runtime_status(self) -> dict[str, dict[str, Optional[str]]]:
-        mapping = {
-            "python": "python/python.exe",
-            "node": "node/node.exe",
-            "java": "java/bin/java.exe",
-            "gcc": "gcc/bin/gcc.exe",
-            "gpp": "gcc/bin/g++.exe",
-            "dotnet": "dotnet/dotnet.exe",
-            "bash": "bash/usr/bin/bash.exe",
-            "powershell": "powershell/7/pwsh.exe",
-        }
         config = self.load()
         status: dict[str, dict[str, Optional[str]]] = {}
-        for key, bundled_relpath in mapping.items():
+        for key, bundled_relpath in self.RUNTIME_BUNDLED_PATHS.items():
             configured = getattr(config, key, None)
             resolution = self.resolve_with_metadata(key, bundled_relpath)
+            bundled_path = self.bundle_root / bundled_relpath
+            bundled_exists = bundled_path.exists()
             status[key] = {
                 "configured": configured,
                 "resolved": str(resolution.path) if resolution.path else None,
                 "source": resolution.source,
                 "determinism": resolution.determinism,
+                "bundled_path": str(bundled_path),
+                "bundled_installed": bundled_exists,
             }
         return status
 

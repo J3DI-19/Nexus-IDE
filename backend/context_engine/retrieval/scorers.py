@@ -6,6 +6,55 @@ from ..index.manager import IndexManager
 from ..index.traversal import GraphTraversalEngine
 from ..runtime.analyzer import RuntimeAnalyzer
 
+QUERY_SYNONYMS = {
+    "route": {"routing", "router", "routes"},
+    "router": {"route", "routing", "routes"},
+    "response": {"responses", "encoder", "encoders"},
+    "schema": {"openapi", "model", "models", "params", "param"},
+    "parameter": {"param", "params", "argument", "field"},
+    "param": {"parameter", "params", "field"},
+    "blueprint": {"blueprints", "scaffold", "register"},
+    "context": {"ctx", "globals", "request"},
+}
+
+def _path_tokens(rel_path: str) -> List[str]:
+    cleaned = rel_path.lower()
+    for sep in ["/", "\\", ".", "-", ":"]:
+        cleaned = cleaned.replace(sep, "_")
+    return [tok for tok in cleaned.split("_") if tok]
+
+def _active_domain_tokens(active_file: Optional[str]) -> List[str]:
+    if not active_file:
+        return []
+    weak = {"api", "route", "routes", "controller", "controllers", "src", "main", "java", "cs", "py", "ts", "tsx"}
+    return [tok for tok in _path_tokens(active_file) if len(tok) > 3 and tok not in weak]
+
+def _normalized_query_terms(task: str) -> List[str]:
+    raw = task.lower().replace("-", " ").replace("_", " ").split()
+    terms = set(raw)
+    for token in raw:
+        terms.update(QUERY_SYNONYMS.get(token, set()))
+        for key, values in QUERY_SYNONYMS.items():
+            if token in values:
+                terms.add(key)
+    return [term for term in terms if len(term) > 2]
+
+def _is_framework_context(active_file: Optional[str], candidate_path: Optional[str] = None) -> bool:
+    haystack = f"{(active_file or '').lower()} {(candidate_path or '').lower()}"
+    markers = [
+        "openapi/",
+        "dependencies/",
+        "security/",
+        "sansio/",
+        "json/",
+        "applications.py",
+        "blueprints.py",
+        "wrappers.py",
+        "ctx.py",
+        "globals.py",
+    ]
+    return any(marker in haystack for marker in markers)
+
 def score_runtime_relevance(query: RetrievalQuery, candidate: FileMetadata, runtime: RuntimeAnalyzer, index: IndexManager) -> Optional[ScoreComponent]:
     referenced_files = runtime.get_referenced_files()
     referenced_symbols = runtime.get_referenced_symbols()
@@ -78,6 +127,7 @@ def score_proximity(query: RetrievalQuery, candidate: FileMetadata) -> Optional[
 
 def score_classification(query: RetrievalQuery, candidate: FileMetadata) -> Optional[ScoreComponent]:
     task_lower = query.task.lower()
+    query_terms = set(_normalized_query_terms(query.task))
     mapping = {
         "route": ["api", "route", "endpoint", "controller", "request"],
         "model": ["db", "database", "model", "schema", "table", "entity"],
@@ -98,15 +148,18 @@ def score_classification(query: RetrievalQuery, candidate: FileMetadata) -> Opti
     return None
 
 def score_name_similarity(query: RetrievalQuery, candidate: FileMetadata) -> Optional[ScoreComponent]:
-    task_words = set(query.task.lower().replace("_", " ").replace("-", " ").split())
+    task_words = set(_normalized_query_terms(query.task))
     file_name = os.path.basename(candidate.rel_path).lower()
     
-    # BOOSTED: Increased from 15 to 40
+    # Keep name matching as a light hint to avoid overfitting to generic names.
+    weak_terms = {"service", "controller", "model", "route", "routes", "handler", "helper", "utils", "doc", "docs"}
     best_match = 0
     match_word = ""
     for word in task_words:
-        if len(word) > 3 and word in file_name:
-            best_match = 40.0
+        if len(word) <= 3 or word in weak_terms:
+            continue
+        if word in file_name:
+            best_match = 14.0
             match_word = word
             break
     
@@ -125,12 +178,16 @@ def score_modification_intent(query: RetrievalQuery, candidate: FileMetadata, in
     """
     mode = query.mode
     task_lower = query.task.lower()
+    query_terms = set(_normalized_query_terms(query.task))
     
     # Layer biasing
     if mode == "feature":
-        # Features likely happen in services/logic
+        # Features typically land in service/repository layers.
+        path_lower = candidate.rel_path.lower()
+        if "service" in path_lower or "repository" in path_lower:
+            return ScoreComponent(factor="Intent Bias", points=24.0, reason="Service/data layer prioritized for feature development")
         if candidate.classification in {"utility", "model"}:
-            return ScoreComponent(factor="Intent Bias", points=25.0, reason="Logic layer prioritized for feature development")
+            return ScoreComponent(factor="Intent Bias", points=10.0, reason="Logic layer mildly prioritized for feature development")
     
     elif mode == "refactor" or "extract" in task_lower:
         # Refactors likely target validators, utils, or abstractions
@@ -142,8 +199,11 @@ def score_modification_intent(query: RetrievalQuery, candidate: FileMetadata, in
     for sym in symbols:
         sym_name_lower = sym.name.lower()
         # If task mentions a specific action (e.g. 'validate') and symbol matches
-        for word in ["validate", "check", "parse", "process", "calculate", "save", "fetch"]:
-            if word in task_lower and word in sym_name_lower:
+        extra_words: List[str] = []
+        if query.mode == "feature" and _is_framework_context(query.active_file, candidate.rel_path):
+            extra_words = ["route", "response", "schema", "param", "blueprint", "context"]
+        for word in ["validate", "check", "parse", "process", "calculate", "save", "fetch", "render"] + extra_words:
+            if (word in task_lower or word in query_terms) and word in sym_name_lower:
                 return ScoreComponent(
                     factor="Symbol Intent Match", 
                     points=35.0, 
@@ -157,17 +217,25 @@ def score_hub_penalty(query: RetrievalQuery, candidate: FileMetadata, index: Ind
     Applies a dynamic penalty to graph hubs (routes, main) for modification tasks.
     """
     # Only penalize if it's a modification task and not explicitly targeting entry logic
-    is_mod = query.mode in {"feature", "bugfix", "refactor"}
+    is_mod = query.mode in {"feature", "bugfix", "refactor", "architecture"}
     task_lower = query.task.lower()
     targets_entry = any(word in task_lower for word in ["route", "endpoint", "api", "entry", "main", "controller"])
     
     if is_mod and not targets_entry:
-        if candidate.classification == "route" or os.path.basename(candidate.rel_path) == "main.py":
+        path_lower = candidate.rel_path.lower()
+        basename = os.path.basename(path_lower)
+        if (
+            candidate.classification == "route"
+            or basename in {"main.py", "main.ts", "main.tsx", "application.java", "program.cs"}
+            or "router" in path_lower
+            or "startup" in path_lower
+            or "config" in path_lower
+        ):
             # Dynamic penalty based on out-degree (hubs have high out-degree)
             deps = index.get_dependencies(candidate.rel_path)
             out_degree = len([d for d in deps if d.type != "import"]) # Generic calls
             
-            penalty = -10.0 - (min(out_degree, 10) * 2.0)
+            penalty = -16.0 - (min(out_degree, 12) * 2.0)
             return ScoreComponent(
                 factor="Hub Penalty",
                 points=penalty,
@@ -176,12 +244,215 @@ def score_hub_penalty(query: RetrievalQuery, candidate: FileMetadata, index: Ind
             
     return None
 
+def score_active_file_affinity(query: RetrievalQuery, candidate: FileMetadata) -> Optional[ScoreComponent]:
+    """
+    Biases toward files that share the active-file domain token (e.g. payment_* -> payment service).
+    """
+    if not query.active_file:
+        return None
+
+    active_base = os.path.basename(query.active_file).lower()
+    candidate_path = candidate.rel_path.lower()
+
+    base = active_base.replace(".tsx", "").replace(".ts", "").replace(".py", "").replace(".java", "").replace(".cs", "")
+    domain_tokens = [t for t in base.replace("-", "_").split("_") if t and t not in {"api", "route", "routes", "controller"}]
+    if not domain_tokens:
+        # Fallback for framework-style package repos where domain tokens are weak.
+        active_dir = os.path.dirname(query.active_file).lower()
+        candidate_dir = os.path.dirname(candidate_path).lower()
+        if active_dir and candidate_dir:
+            active_root = active_dir.split("/")[0]
+            cand_root = candidate_dir.split("/")[0]
+            if active_dir == candidate_dir:
+                return ScoreComponent(
+                    factor="Module Affinity",
+                    points=14.0,
+                    reason="Candidate shares exact module directory with active file"
+                )
+            if active_root and active_root == cand_root:
+                return ScoreComponent(
+                    factor="Module Affinity",
+                    points=9.0,
+                    reason="Candidate shares top-level package neighborhood"
+                )
+        return None
+
+    strong_tokens = [t for t in domain_tokens if len(t) > 3]
+    if not strong_tokens:
+        return None
+
+    if any(tok in candidate_path for tok in strong_tokens):
+        return ScoreComponent(
+            factor="Active File Affinity",
+            points=18.0,
+            reason="Candidate path shares domain token with active file"
+        )
+
+    # Mild demotion for sibling layer files that do not match active domain token.
+    if query.mode != "refactor" and any(seg in candidate_path for seg in ["service", "repository", "controller", "route"]):
+        return ScoreComponent(
+            factor="Domain Mismatch",
+            points=-8.0,
+            reason="Sibling layer candidate does not share active-file domain token"
+        )
+
+    return None
+
+def score_framework_feature_intent(query: RetrievalQuery, candidate: FileMetadata, index: IndexManager) -> Optional[ScoreComponent]:
+    """
+    Framework-aware feature scorer for real repositories (FastAPI/Flask style structures).
+    """
+    if query.mode != "feature":
+        return None
+
+    terms = set(_normalized_query_terms(query.task))
+    path = candidate.rel_path.lower()
+    active_path = (query.active_file or "").lower()
+    if not _is_framework_context(active_path, path):
+        return None
+    score = 0.0
+    reasons: List[str] = []
+
+    if any(term in terms for term in {"route", "router", "routing"}):
+        if any(seg in path for seg in ["routing.py", "applications.py", "blueprints.py", "sansio/scaffold.py"]):
+            score += 22.0
+            reasons.append("routing/blueprint intent matched")
+    if any(term in terms for term in {"response", "responses"}):
+        if any(seg in path for seg in ["responses.py", "encoders.py", "wrappers.py", "helpers.py"]):
+            score += 20.0
+            reasons.append("response handling intent matched")
+    if any(term in terms for term in {"schema", "openapi", "param", "params", "parameter"}):
+        if any(seg in path for seg in ["openapi/utils.py", "params.py", "param_functions.py", "json/provider.py", "json/tag.py"]):
+            score += 24.0
+            reasons.append("schema/params intent matched")
+    if any(term in terms for term in {"context", "request"}):
+        if any(seg in path for seg in ["ctx.py", "globals.py", "app.py"]):
+            score += 16.0
+            reasons.append("context lifecycle intent matched")
+
+    symbols = index.get_symbols_for_file(candidate.rel_path)
+    for sym in symbols:
+        sname = sym.name.lower()
+        if any(term in sname for term in ["route", "router", "openapi", "schema", "param", "response", "blueprint", "context"]):
+            score += 7.0
+            reasons.append(f"symbol '{sym.name}' aligns with intent")
+            break
+
+    if score == 0.0:
+        return None
+
+    return ScoreComponent(
+        factor="Framework Feature Intent",
+        points=score,
+        reason="; ".join(reasons)
+    )
+
+def score_docs_intent(query: RetrievalQuery, candidate: FileMetadata, index: IndexManager) -> Optional[ScoreComponent]:
+    """
+    Prioritizes service-doc generation paths for documentation-oriented tasks.
+    """
+    task_lower = query.task.lower()
+    if query.mode != "architecture" and not any(word in task_lower for word in {"doc", "docs", "document", "documentation"}):
+        return None
+
+    path_lower = candidate.rel_path.lower()
+    score = 0.0
+    reasons: List[str] = []
+
+    if "doc" in path_lower or "readme" in path_lower:
+        score += 18.0
+        reasons.append("documentation path")
+    if "service" in path_lower:
+        score += 8.0
+        reasons.append("service-layer context")
+    if "client" in path_lower and query.mode == "architecture":
+        score -= 10.0
+        reasons.append("client-layer deprioritized for system docs")
+
+    symbols = index.get_symbols_for_file(candidate.rel_path)
+    for sym in symbols:
+        name = sym.name.lower()
+        if any(k in name for k in ["doc", "render", "template", "summary", "generate"]):
+            score += 10.0
+            reasons.append(f"symbol '{sym.name}' indicates docs generation")
+            break
+
+    if score == 0:
+        return None
+
+    return ScoreComponent(
+        factor="Docs Intent",
+        points=score,
+        reason="; ".join(reasons)
+    )
+
+def score_refactor_targets(query: RetrievalQuery, candidate: FileMetadata, index: IndexManager) -> Optional[ScoreComponent]:
+    """
+    Refactor-specific scorer that prefers validation/adapter/transform paths and symbols,
+    while penalizing unrelated domain siblings.
+    """
+    if query.mode != "refactor" and "extract" not in query.task.lower():
+        return None
+
+    path_lower = candidate.rel_path.lower()
+    score = 0.0
+    reasons: List[str] = []
+
+    strong_path_terms = ["validator", "validation", "adapter", "mapper", "transform", "normaliz", "helper", "util"]
+    if any(term in path_lower for term in strong_path_terms):
+        score += 26.0
+        reasons.append("refactor-oriented path pattern")
+
+    symbols = index.get_symbols_for_file(candidate.rel_path)
+    strong_symbol_terms = ["validate", "normaliz", "map", "adapt", "transform", "extract", "helper"]
+    for sym in symbols:
+        s_name = sym.name.lower()
+        if any(term in s_name for term in strong_symbol_terms):
+            score += 20.0
+            reasons.append(f"symbol '{sym.name}' matches refactor intent")
+            break
+
+    domain_tokens = _active_domain_tokens(query.active_file)
+    if domain_tokens:
+        if any(tok in path_lower for tok in domain_tokens):
+            score += 12.0
+            reasons.append("same-domain refactor candidate")
+        elif any(seg in path_lower for seg in ["service", "repository", "controller"]):
+            score -= 16.0
+            reasons.append("generic sibling layer outside active domain")
+
+    task_lower = query.task.lower()
+    query_terms = set(_normalized_query_terms(query.task))
+    if ("extract" in task_lower or "shared" in task_lower) and any(term in path_lower for term in ["builder", "template"]):
+        score += 18.0
+        reasons.append("abstraction builder/template target for extraction task")
+
+    # Extra dampening for generic service collisions common in Java/C#
+    base = os.path.basename(path_lower)
+    if base.endswith("service.java") or base.endswith("service.cs"):
+        if not any(tok in path_lower for tok in domain_tokens):
+            score -= 10.0
+            reasons.append("generic service collision penalty")
+    if "validationutils" in base and domain_tokens and not any(tok in path_lower for tok in domain_tokens):
+        score -= 14.0
+        reasons.append("global validation utility deprioritized for domain-focused refactor")
+
+    if score == 0:
+        return None
+
+    return ScoreComponent(
+        factor="Refactor Targeting",
+        points=score,
+        reason="; ".join(reasons)
+    )
+
 def score_framework_artifacts(query: RetrievalQuery, candidate: FileMetadata, index: IndexManager) -> Optional[ScoreComponent]:
     artifacts = index.get_artifacts_for_file(candidate.rel_path)
     if not artifacts:
         return None
         
     task_lower = query.task.lower()
+    query_terms = set(_normalized_query_terms(query.task))
     
     for artifact in artifacts:
         if artifact.artifact_type.lower().replace("_", " ") in task_lower or artifact.name.lower() in task_lower:
@@ -327,3 +598,44 @@ def score_dependencies(query: RetrievalQuery, candidate: FileMetadata, index: In
                     best_component = comp
 
     return best_component
+
+def score_domain_signal_balance(query: RetrievalQuery, candidate: FileMetadata, index: IndexManager) -> Optional[ScoreComponent]:
+    """
+    Reduces cross-domain noise for bugfix/feature and lightly boosts direct dependency links.
+    """
+    if query.mode not in {"bugfix", "feature"} or not query.active_file:
+        return None
+
+    candidate_path = candidate.rel_path.lower()
+    domain_tokens = _active_domain_tokens(query.active_file)
+    same_domain = any(tok in candidate_path for tok in domain_tokens) if domain_tokens else False
+
+    has_runtime = False
+    has_call_chain = False
+    has_dependency = False
+    for comp in [score_dependencies(query, candidate, index)]:
+        if not comp:
+            continue
+        if comp.factor in {"Call Chain"}:
+            has_call_chain = True
+        if comp.factor in {"Direct Dependency", "Reverse Dependency"}:
+            has_dependency = True
+    has_signal = has_call_chain or has_dependency or has_runtime
+
+    if any(seg in candidate_path for seg in ["service", "repository"]) and not same_domain and not has_signal:
+        return ScoreComponent(
+            factor="Cross-Domain Noise Penalty",
+            points=-6.0,
+            reason="Cross-domain sibling service/repository without dependency/runtime signal"
+        )
+
+    if has_signal and not same_domain:
+        return ScoreComponent(
+            factor="Direct Signal Boost",
+            points=5.0,
+            reason="Direct dependency/call signal present despite weak domain token match"
+        )
+
+    return None
+
+
