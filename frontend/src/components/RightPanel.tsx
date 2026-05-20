@@ -1614,8 +1614,8 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                   { key: 'gcc', label: 'C compiler', placeholder: 'backend/runtimes/gcc/bin/gcc.exe' },
                   { key: 'gpp', label: 'C++ compiler', placeholder: 'backend/runtimes/gcc/bin/g++.exe' },
                   { key: 'dotnet', label: 'C# compiler', placeholder: 'backend/runtimes/dotnet/sdk/csc.exe' },
-                  { key: 'bash', label: 'Bash', placeholder: 'backend/runtimes/bash/bin/bash.exe' },
-                  { key: 'powershell', label: 'PowerShell', placeholder: 'backend/runtimes/powershell/bin/powershell.exe' },
+                  { key: 'bash', label: 'Bash', placeholder: 'backend/runtimes/bash/usr/bin/bash.exe' },
+                  { key: 'powershell', label: 'PowerShell', placeholder: 'backend/runtimes/powershell/pwsh.exe' },
                 ].map((runtime) => (
                   <label className="runtime-setting-row" key={runtime.key}>
                     <div className="runtime-setting-meta">

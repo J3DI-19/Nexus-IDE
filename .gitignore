@@ -38,6 +38,7 @@ tmp/
 
 # Local runtime artifacts (do not commit)
 backend/runtimes/
+backend/tools/
 backend/.nexus-runner/
 backend/.nexus-cs-runner/
 backend/runtime_audit/

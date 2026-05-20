@@ -118,7 +118,7 @@ async def get_runtime_settings():
         "gpp": "gcc/bin/g++.exe",
         "dotnet": "dotnet/dotnet.exe",
         "bash": "bash/usr/bin/bash.exe",
-        "powershell": "powershell/7/pwsh.exe",
+        "powershell": "powershell/pwsh.exe",
     }
     payload = current.__dict__.copy()
     changed = False

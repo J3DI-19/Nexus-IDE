@@ -58,7 +58,7 @@ class RuntimeInstaller:
         "gpp": "gcc/bin/g++.exe",
         "dotnet": "dotnet/dotnet.exe",
         "bash": "bash/usr/bin/bash.exe",
-        "powershell": "powershell/7/pwsh.exe",
+        "powershell": "powershell/pwsh.exe",
     }
 
     def __init__(self):

@@ -78,6 +78,46 @@ npm run dev
 
 Frontend runs at `http://localhost:5173`.
 
+## Runtime Installation (One Click)
+
+NEXUS IDE can install bundled runtimes directly from the app.
+
+1. Open `Settings`.
+2. Go to the `Runtimes` section.
+3. Select the runtimes you want.
+4. Click `Install Selected`, `Install All`, or `Update Selected`.
+5. Save settings.
+
+Installed runtimes are stored locally under `backend/runtimes/` and are not committed to Git.
+
+## Supported Languages
+
+Language adapters currently ship for:
+
+- Python
+- TypeScript
+- JavaScript
+- Java
+- Kotlin
+- C#
+- C++
+- HTML
+- CSS
+- XML
+- JSON
+- YAML
+- TOML
+
+## Supported Frameworks
+
+Framework adapters currently ship for:
+
+- FastAPI (route extraction)
+- React (component and hook signal extraction)
+- Android (manifest/layout/gradle/module/source-link intelligence)
+
+Project/framework detection signals also include: React, Vite, Node.js, Android, Java, C#, C++, and FastAPI.
+
 ## Repository Notes
 
 - Large local runtime bundles and temporary artifacts are intentionally excluded from version control.
