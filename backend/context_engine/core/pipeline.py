@@ -41,6 +41,7 @@ class ContextPipeline:
         all_files = fast_recursive_scan(str(root))
         
         self.project_metadata = self.classifier.detect_frameworks(root, all_files)
+        self.retrieval.set_root_path(str(root))
         
         # Reset index for full re-scan
         self.index.clear()

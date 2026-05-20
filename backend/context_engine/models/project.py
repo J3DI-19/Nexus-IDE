@@ -6,3 +6,5 @@ class ProjectMetadata(BaseModel):
     project_name: str
     frameworks_detected: List[str] = []
     entry_points: List[str] = []
+    android_detected: bool = False
+    android_detection_reasons: List[str] = []

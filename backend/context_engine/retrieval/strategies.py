@@ -7,7 +7,13 @@ from . import scorers
 
 class RetrievalStrategy(ABC):
     @abstractmethod
-    def execute(self, query: RetrievalQuery, index: IndexManager, runtime: Optional[RuntimeAnalyzer] = None) -> List[ContextCandidate]:
+    def execute(
+        self,
+        query: RetrievalQuery,
+        index: IndexManager,
+        runtime: Optional[RuntimeAnalyzer] = None,
+        android_context: Optional[dict] = None,
+    ) -> List[ContextCandidate]:
         pass
 
 
@@ -29,7 +35,13 @@ class DefaultDeterministicStrategy(RetrievalStrategy):
     """
     Legacy File-Centric Strategy.
     """
-    def execute(self, query: RetrievalQuery, index: IndexManager, runtime: Optional[RuntimeAnalyzer] = None) -> List[ContextCandidate]:
+    def execute(
+        self,
+        query: RetrievalQuery,
+        index: IndexManager,
+        runtime: Optional[RuntimeAnalyzer] = None,
+        android_context: Optional[dict] = None,
+    ) -> List[ContextCandidate]:
         candidates = []
         
         for rel_path, metadata in index.iter_files_items():
@@ -84,6 +96,27 @@ class DefaultDeterministicStrategy(RetrievalStrategy):
 
             s_balance = scorers.score_domain_signal_balance(query, metadata, index)
             if s_balance: breakdown.append(s_balance)
+
+            s_android_module = scorers.score_android_module_locality(query, metadata)
+            if s_android_module: breakdown.append(s_android_module)
+
+            s_android_manifest_layout = scorers.score_android_manifest_layout_proximity(query, metadata)
+            if s_android_manifest_layout: breakdown.append(s_android_manifest_layout)
+
+            s_android_bridge = scorers.score_android_resource_bridge(query, metadata, index)
+            if s_android_bridge: breakdown.append(s_android_bridge)
+
+            s_android_scope = scorers.score_android_scope_alignment(query, metadata, index)
+            if s_android_scope: breakdown.append(s_android_scope)
+
+            android_context_scores = scorers.score_android_contextual_signals(
+                query=query,
+                candidate=metadata,
+                index=index,
+                runtime=runtime,
+                android_context=android_context,
+            )
+            breakdown.extend(android_context_scores)
             
             breakdown = _apply_score_caps(breakdown)
             if breakdown:
@@ -133,7 +166,13 @@ class SymbolCentricStrategy(RetrievalStrategy):
     Phase 8B: Symbol-Centric Strategy.
     Scores symbols individually, then aggregates them to file-level.
     """
-    def execute(self, query: RetrievalQuery, index: IndexManager, runtime: Optional[RuntimeAnalyzer] = None) -> List[ContextCandidate]:
+    def execute(
+        self,
+        query: RetrievalQuery,
+        index: IndexManager,
+        runtime: Optional[RuntimeAnalyzer] = None,
+        android_context: Optional[dict] = None,
+    ) -> List[ContextCandidate]:
         candidates = []
         sym_scorer = SymbolScorer(index)
         
@@ -201,6 +240,27 @@ class SymbolCentricStrategy(RetrievalStrategy):
 
             s_balance = scorers.score_domain_signal_balance(query, metadata, index)
             if s_balance: file_breakdown.append(s_balance)
+
+            s_android_module = scorers.score_android_module_locality(query, metadata)
+            if s_android_module: file_breakdown.append(s_android_module)
+
+            s_android_manifest_layout = scorers.score_android_manifest_layout_proximity(query, metadata)
+            if s_android_manifest_layout: file_breakdown.append(s_android_manifest_layout)
+
+            s_android_bridge = scorers.score_android_resource_bridge(query, metadata, index)
+            if s_android_bridge: file_breakdown.append(s_android_bridge)
+
+            s_android_scope = scorers.score_android_scope_alignment(query, metadata, index)
+            if s_android_scope: file_breakdown.append(s_android_scope)
+
+            android_context_scores = scorers.score_android_contextual_signals(
+                query=query,
+                candidate=metadata,
+                index=index,
+                runtime=runtime,
+                android_context=android_context,
+            )
+            file_breakdown.extend(android_context_scores)
 
             # 3. Aggregation Logic
             # Final Score = Max(Symbol Score) + File Architecture Score + Density Bonus
@@ -270,7 +330,13 @@ class DependencyOnlyStrategy(RetrievalStrategy):
     """
     Strictly focuses on the import graph.
     """
-    def execute(self, query: RetrievalQuery, index: IndexManager) -> List[ContextCandidate]:
+    def execute(
+        self,
+        query: RetrievalQuery,
+        index: IndexManager,
+        runtime: Optional[RuntimeAnalyzer] = None,
+        android_context: Optional[dict] = None,
+    ) -> List[ContextCandidate]:
         if not query.active_file:
             return []
             

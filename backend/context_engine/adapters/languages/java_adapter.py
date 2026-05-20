@@ -17,7 +17,13 @@ class JavaAdapter(LanguageAdapter):
         # Regex patterns for Java
         class_pattern = re.compile(r'(?:public|protected|private|static\s+)?(?:abstract\s+)?class\s+(\w+)')
         interface_pattern = re.compile(r'(?:public|protected|private|static\s+)?interface\s+(\w+)')
-        method_pattern = re.compile(r'(?:public|protected|private|static\s+)+(?:[\w<>\[\]]+\s+)+(\w+)\s*\(.*?\)\s*(?:throws\s+[\w,\s]+)?\s*\{')
+        method_pattern = re.compile(
+            r'^\s*(?:public|protected|private)?\s*(?:static\s+)?(?:final\s+)?(?:synchronized\s+)?'
+            r'(?:[\w<>\[\],?]+\s+)+(\w+)\s*\([^;]*\)\s*(?:throws\s+[\w\.,\s]+)?\s*(?:\{)?\s*$'
+        )
+        constructor_pattern = re.compile(
+            r'^\s*(?:public|protected|private)\s+(\w+)\s*\([^;]*\)\s*(?:throws\s+[\w\.,\s]+)?\s*(?:\{)?\s*$'
+        )
         annotation_pattern = re.compile(r'@(\w+)(?:\(.*?\))?')
 
         current_class = None
@@ -29,35 +35,39 @@ class JavaAdapter(LanguageAdapter):
             class_match = class_pattern.search(line)
             if class_match:
                 current_class = class_match.group(1)
+                end_line = self._find_block_end(lines, i) if "{" in line else line_num
                 symbols.append(Symbol(
                     name=current_class,
                     type="class",
                     start_line=line_num,
-                    end_line=line_num
+                    end_line=end_line
                 ))
                 continue
 
             # Interface detection
             interface_match = interface_pattern.search(line)
             if interface_match:
+                end_line = self._find_block_end(lines, i) if "{" in line else line_num
                 symbols.append(Symbol(
                     name=interface_match.group(1),
                     type="interface",
                     start_line=line_num,
-                    end_line=line_num
+                    end_line=end_line
                 ))
                 continue
 
             # Method detection
             method_match = method_pattern.search(line)
-            if method_match:
-                name = method_match.group(1)
+            constructor_match = constructor_pattern.search(line)
+            if method_match or constructor_match:
+                name = (method_match or constructor_match).group(1)
                 if name not in {"if", "for", "while", "switch", "catch", "new", "return"}:
+                    end_line = self._find_block_end(lines, i)
                     symbols.append(Symbol(
                         name=name,
                         type="method",
                         start_line=line_num,
-                        end_line=line_num,
+                        end_line=end_line,
                         parent_id=current_class
                     ))
             
@@ -73,6 +83,28 @@ class JavaAdapter(LanguageAdapter):
                 ))
 
         return symbols
+
+    def _find_block_end(self, lines: List[str], start_idx: int) -> int:
+        """
+        Finds the closing brace line for a Java block starting at start_idx.
+        Best-effort deterministic parser with lightweight comment/string stripping.
+        """
+        brace_count = 0
+        found_open = False
+        for i in range(start_idx, len(lines)):
+            line = lines[i]
+            clean = re.sub(r'//.*', '', line)
+            clean = re.sub(r'"[^"\\\\]*(?:\\\\.[^"\\\\]*)*"', '""', clean)
+            clean = re.sub(r"'[^'\\\\]*(?:\\\\.[^'\\\\]*)*'", "''", clean)
+            opens = clean.count('{')
+            closes = clean.count('}')
+            if opens > 0:
+                found_open = True
+            brace_count += opens
+            brace_count -= closes
+            if found_open and brace_count <= 0:
+                return i + 1
+        return start_idx + 1
 
     def extract_dependencies(self, content: str, file_path: str) -> List[DependencyEdge]:
         edges = []

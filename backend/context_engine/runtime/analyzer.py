@@ -2,21 +2,48 @@ from typing import List, Optional
 import threading
 from .models import RuntimeArtifact, RuntimeArtifactType
 from .detectors import RuntimeDetector
+from ..android.models import AndroidRuntimeSignal, AndroidFailureContext, AndroidDiagnostic
+from ..android.runtime_parser import AndroidRuntimeParser
 
 class RuntimeAnalyzer:
     def __init__(self):
         self.detector = RuntimeDetector()
+        self.android_parser = AndroidRuntimeParser()
         self._lock = threading.RLock()
         self._current_artifacts: List[RuntimeArtifact] = []
+        self._android_runtime_signals: List[AndroidRuntimeSignal] = []
+        self._android_failure_contexts: List[AndroidFailureContext] = []
+        self._android_runtime_diagnostics: List[AndroidDiagnostic] = []
         self._diagnostic_versions = {}
 
     def ingest_log(self, log: str):
         artifact = self.detector.detect_and_parse(log)
+        android_signals, android_contexts, android_diagnostics = self.android_parser.parse(log)
         if artifact:
+            artifact.metadata["android_runtime"] = {
+                "signals": [_dump_model(signal) for signal in android_signals],
+                "failure_contexts": [_dump_model(ctx) for ctx in android_contexts],
+                "diagnostics": [_dump_model(diag) for diag in android_diagnostics],
+            }
             with self._lock:
                 # Maintain a rolling buffer of top 5 artifacts
                 self._current_artifacts.insert(0, artifact)
                 self._current_artifacts = self._current_artifacts[:5]
+                self._android_runtime_signals = _merge_android_signals(
+                    new_items=android_signals,
+                    existing=self._android_runtime_signals,
+                    limit=30,
+                )
+                self._android_failure_contexts = _merge_android_failure_contexts(
+                    new_items=android_contexts,
+                    existing=self._android_failure_contexts,
+                    limit=15,
+                )
+                self._android_runtime_diagnostics = _merge_android_diagnostics(
+                    new_items=android_diagnostics,
+                    existing=self._android_runtime_diagnostics,
+                    limit=20,
+                )
         return artifact
 
     def get_active_artifacts(self) -> List[RuntimeArtifact]:
@@ -26,6 +53,9 @@ class RuntimeAnalyzer:
     def clear(self):
         with self._lock:
             self._current_artifacts = []
+            self._android_runtime_signals = []
+            self._android_failure_contexts = []
+            self._android_runtime_diagnostics = []
             self._diagnostic_versions = {}
 
     def replace_diagnostics_for_file(self, file_path: str, diagnostics: List[RuntimeArtifact], version: int = 0) -> bool:
@@ -122,3 +152,108 @@ class RuntimeAnalyzer:
         # Sort by hits and leaf status
         sorted_hot = sorted(hot_map.values(), key=lambda x: (x["is_leaf"], x["hits"]), reverse=True)
         return sorted_hot[:5]
+
+    def get_android_runtime_signals(self) -> List[AndroidRuntimeSignal]:
+        with self._lock:
+            return list(self._android_runtime_signals)
+
+    def get_android_failure_contexts(self) -> List[AndroidFailureContext]:
+        with self._lock:
+            return list(self._android_failure_contexts)
+
+    def get_android_runtime_diagnostics(self) -> List[AndroidDiagnostic]:
+        with self._lock:
+            return list(self._android_runtime_diagnostics)
+
+    def get_android_runtime_tags(self) -> List[str]:
+        with self._lock:
+            tags = {signal.category for signal in self._android_runtime_signals}
+        return sorted(tags)
+
+    def get_android_runtime_summary(self) -> dict:
+        with self._lock:
+            categories = {}
+            for signal in self._android_runtime_signals:
+                categories[signal.category] = categories.get(signal.category, 0) + 1
+            return {
+                "count": len(self._android_runtime_signals),
+                "categories": dict(sorted(categories.items(), key=lambda item: item[0])),
+                "signals": [_dump_model(signal) for signal in self._android_runtime_signals[:12]],
+                "failure_contexts": [_dump_model(ctx) for ctx in self._android_failure_contexts[:8]],
+                "diagnostics": [_dump_model(diag) for diag in self._android_runtime_diagnostics[:12]],
+            }
+
+
+def _merge_android_signals(
+    new_items: List[AndroidRuntimeSignal],
+    existing: List[AndroidRuntimeSignal],
+    limit: int,
+) -> List[AndroidRuntimeSignal]:
+    merged = list(new_items) + list(existing)
+    deduped = {}
+    for signal in merged:
+        key = "|".join(
+            [
+                signal.category,
+                signal.file or "",
+                str(signal.line or 0),
+                signal.symbol or "",
+                signal.message,
+            ]
+        )
+        if key not in deduped:
+            deduped[key] = signal
+    items = sorted(deduped.values(), key=lambda item: (item.category, item.file or "", item.line or 0, item.symbol or ""))
+    return items[:limit]
+
+
+def _merge_android_failure_contexts(
+    new_items: List[AndroidFailureContext],
+    existing: List[AndroidFailureContext],
+    limit: int,
+) -> List[AndroidFailureContext]:
+    merged = list(new_items) + list(existing)
+    deduped = {}
+    for ctx in merged:
+        key = "|".join(
+            [
+                ctx.failure_kind,
+                ctx.stage,
+                ",".join(ctx.implicated_modules),
+                ",".join(ctx.implicated_files),
+                ",".join(ctx.implicated_symbols),
+            ]
+        )
+        if key not in deduped:
+            deduped[key] = ctx
+    items = sorted(deduped.values(), key=lambda item: (item.failure_kind, item.stage))
+    return items[:limit]
+
+
+def _merge_android_diagnostics(
+    new_items: List[AndroidDiagnostic],
+    existing: List[AndroidDiagnostic],
+    limit: int,
+) -> List[AndroidDiagnostic]:
+    merged = list(new_items) + list(existing)
+    deduped = {}
+    for diag in merged:
+        key = "|".join(
+            [
+                diag.code,
+                diag.message,
+                diag.source_path or "",
+                str(diag.line or 0),
+                str(diag.column or 0),
+            ]
+        )
+        if key not in deduped:
+            deduped[key] = diag
+    items = sorted(deduped.values(), key=lambda item: (item.code, item.source_path or ""))
+    return items[:limit]
+
+
+def _dump_model(model):
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()

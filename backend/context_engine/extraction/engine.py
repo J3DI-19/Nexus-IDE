@@ -62,7 +62,7 @@ class ExtractionEngine:
         if not symbols:
             return []
         action_hints = {
-            "feature": {"create", "add", "update", "process", "calculate", "save"},
+            "feature": {"create", "add", "update", "process", "calculate", "save", "set", "show", "insert", "listener", "on"},
             "refactor": {"validate", "check", "parse", "extract", "normalize"},
             "bugfix": {"login", "validate", "verify", "auth", "check", "fix"},
             "architecture": {"doc", "render", "generate", "summary"},
@@ -88,12 +88,55 @@ class ExtractionEngine:
             name = sym.name.lower()
             if any(hint in name for hint in action_hints):
                 preferred.append(sym.name)
-            if len(preferred) >= 2:
+            if mode == "feature" and len(preferred) >= 4:
+                break
+            if mode != "feature" and len(preferred) >= 2:
                 break
         if preferred:
             return preferred
 
-        return [sym.name for sym in symbols[:2]]
+        fallback_limit = 4 if mode == "feature" else 2
+        return [sym.name for sym in symbols[:fallback_limit]]
+
+    def _augment_feature_anchors(self, symbols: List, anchor_set: Set[str]) -> Set[str]:
+        if len(anchor_set) >= 4:
+            return anchor_set
+        feature_terms = {"insert", "update", "save", "create", "set", "show", "listener", "on", "inflate", "contentview"}
+        method_candidates = []
+        type_candidates = []
+        for sym in symbols:
+            s_name = sym.name.lower()
+            if any(term in s_name for term in feature_terms):
+                if sym.type in {"function", "method"}:
+                    method_candidates.append(sym.name)
+                elif sym.type in {"interface", "class"}:
+                    type_candidates.append(sym.name)
+        def _feature_priority(name: str) -> tuple[int, str]:
+            lname = name.lower()
+            score = 0
+            if "insert" in lname:
+                score += 8
+            if "save" in lname or "update" in lname:
+                score += 6
+            if "create" in lname:
+                score += 4
+            if "alarm" in lname or "timer" in lname:
+                score += 3
+            if "listener" in lname:
+                score += 2
+            if lname.startswith("on"):
+                score += 1
+            return (score, lname)
+
+        for name in sorted(set(method_candidates), key=_feature_priority, reverse=True):
+            anchor_set.add(name)
+            if len(anchor_set) >= 4:
+                return anchor_set
+        for name in sorted(set(type_candidates)):
+            anchor_set.add(name)
+            if len(anchor_set) >= 4:
+                return anchor_set
+        return anchor_set
 
     def _augment_bugfix_anchors(self, symbols: List, anchor_set: Set[str]) -> Set[str]:
         if len(anchor_set) >= 2:
@@ -109,6 +152,23 @@ class ExtractionEngine:
 
     def _slice_span(self, code_slice: CodeSlice) -> int:
         return max(1, code_slice.end_line - code_slice.start_line + 1)
+
+    def _feature_anchor_priority(self, name: str) -> tuple[int, str]:
+        lname = (name or "").lower()
+        score = 0
+        if "show" in lname or "onalarm" in lname:
+            score += 12
+        if "insert" in lname:
+            score += 11
+        if "save" in lname or "update" in lname:
+            score += 8
+        if "create" in lname:
+            score += 6
+        if "listener" in lname:
+            score += 5
+        if "alarm" in lname or "timer" in lname:
+            score += 3
+        return (score, lname)
 
     def _merge_intervals(self, intervals: List[tuple[int, int]]) -> List[tuple[int, int]]:
         if not intervals:
@@ -309,6 +369,8 @@ class ExtractionEngine:
         anchor_set.update(runtime_symbols)
         if mode == "bugfix":
             anchor_set = self._augment_bugfix_anchors(symbols, anchor_set)
+        if mode == "feature":
+            anchor_set = self._augment_feature_anchors(symbols, anchor_set)
         total_lines = self._file_line_count(rel_path)
         policy = self._build_slice_policy(
             mode=mode,
@@ -336,7 +398,16 @@ class ExtractionEngine:
 
         # 4. Extract Anchors with Expansion
         bugfix_dependency_added = 0
-        ordered_anchor_names = sorted(anchor_set, key=lambda n: 0 if next((s for s in symbols if s.name == n and s.type in {"function", "method"}), None) else 1)
+        def _anchor_sort_key(name: str) -> tuple:
+            sym = next((s for s in symbols if s.name == name), None)
+            is_method = 0 if (sym and sym.type in {"function", "method"}) else 1
+            if mode == "feature":
+                feat_score, feat_name = self._feature_anchor_priority(name)
+                # Higher feature score first, then stable lexical name
+                return (is_method, -feat_score, feat_name)
+            return (is_method, name.lower())
+
+        ordered_anchor_names = sorted(anchor_set, key=_anchor_sort_key)
         for sym_name in ordered_anchor_names:
             sym = next((s for s in symbols if s.name == sym_name), None)
             if not sym: continue
@@ -347,6 +418,21 @@ class ExtractionEngine:
                 sym_slice.anchor_symbol = sym_name
                 sym_slice.expansion_type = "exact"
                 self._append_slice_unique(extracted, sym_slice, max_span=base_span)
+                # For long methods/functions, also capture the tail where callbacks/writes often live.
+                if mode in {"feature", "bugfix", "refactor"} and sym.type in {"function", "method"}:
+                    sym_span = max(1, sym.end_line - sym.start_line + 1)
+                    if sym_span > base_span + 4:
+                        tail_start = max(sym.start_line, sym.end_line - base_span + 1)
+                        tail_slice = self.slicer.extract_lines(
+                            rel_path,
+                            tail_start,
+                            sym.end_line,
+                            f"Anchor Tail: {sym_name}",
+                        )
+                        if tail_slice:
+                            tail_slice.anchor_symbol = sym_name
+                            tail_slice.expansion_type = "dependency"
+                            self._append_slice_unique(extracted, tail_slice, max_span=base_span)
 
             # MODE-SPECIFIC SEMANTIC EXPANSION
             if mode == "refactor":

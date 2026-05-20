@@ -1,9 +1,55 @@
 ---
 
+{% if machine_compact_mode %}
 ### [SYSTEM RULES]
 
 {{ rules }}
-If required context is missing, ask for specific file/symbol slices before patching.
+{{ missing_context_policy }}
+
+---
+
+### [TASK]
+
+Goal: {{ task }}
+Modify ONLY what is necessary to achieve this goal. Avoid unrelated changes.
+{% if output_gate_line %}
+{{ output_gate_line }}
+{% endif %}
+
+{% if edit_starter_hints %}
+### [EDIT STARTER HINTS]
+{% for line in edit_starter_hints[:6] %}
+- {{ line }}
+{% endfor %}
+{% endif %}
+
+### [FILE CONTEXT]
+Current File: {{ active_file_path or "N/A" }}
+{{ active_file }}
+
+{% if related_context %}
+### [RELATED CONTEXT]
+{{ related_context }}
+{% endif %}
+
+---
+
+### [RUNTIME DIAGNOSTICS]
+
+{% if runtime_diagnostics %}
+{{ runtime_diagnostics }}
+{% else %}
+No active runtime errors.
+{% endif %}
+
+---
+
+Follow ALL rules strictly. {{ response_contract }}
+{% else %}
+### [SYSTEM RULES]
+
+{{ rules }}
+{{ missing_context_policy }}
 
 ---
 
@@ -21,6 +67,34 @@ Project Hierarchy (compact):
 Selection Rationale:
 {% for item in top_selection_reasons %}
 - {{ item }}
+{% endfor %}
+{% endif %}
+
+{% if android_briefing_lines %}
+### [ANDROID ENGINEERING BRIEFING]
+{% for line in android_briefing_lines %}
+- {{ line }}
+{% endfor %}
+{% endif %}
+
+{% if android_context_evidence %}
+### [ANDROID CONTEXT EVIDENCE]
+{% for line in android_context_evidence %}
+- {{ line }}
+{% endfor %}
+{% endif %}
+
+{% if actionability_verdict_lines %}
+### [ACTIONABILITY VERDICT]
+{% for line in actionability_verdict_lines %}
+- {{ line }}
+{% endfor %}
+{% endif %}
+
+{% if edit_starter_hints %}
+### [EDIT STARTER HINTS]
+{% for line in edit_starter_hints %}
+- {{ line }}
 {% endfor %}
 {% endif %}
 
@@ -59,5 +133,9 @@ No active runtime errors.
 
 Goal: {{ task }}
 Modify ONLY what is necessary to achieve this goal. Avoid unrelated changes.
+{% if output_gate_line %}
+{{ output_gate_line }}
+{% endif %}
 
 Follow ALL rules strictly. {{ response_contract }}
+{% endif %}

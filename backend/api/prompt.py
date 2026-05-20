@@ -7,6 +7,8 @@ import os
 from utils.security import get_project_root, is_safe_path
 from context_engine.core.scanner import fast_recursive_scan
 from context_engine.core.pipeline import pipeline
+from context_engine.android.briefing import build_android_engineering_briefing
+from context_engine.android.summary_service import get_android_summary
 from context_engine.retrieval.models import RetrievalQuery, ContextCandidate, ScoreComponent
 from context_engine.impact.models import ImpactQuery
 from context_engine.prompt_builder.models import PromptMode
@@ -182,6 +184,25 @@ async def get_context_status():
         "frameworks": pipeline.project_metadata.frameworks_detected if pipeline.project_metadata else []
     }
 
+@router.get("/context/android/summary")
+async def get_android_context_summary():
+    """
+    Returns deterministic Android project context summary.
+    Works independently of the main context index initialization state.
+    """
+    root = get_project_root()
+    if not root:
+        raise HTTPException(status_code=400, detail="Project root not set")
+
+    try:
+        summary = get_android_summary(root, runtime_analyzer=pipeline.runtime)
+        if hasattr(summary, "model_dump"):
+            return summary.model_dump()
+        return summary.dict()
+    except Exception as e:
+        print(f"ANDROID SUMMARY ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/context/initialize")
 async def initialize_context_engine():
     """
@@ -236,7 +257,11 @@ async def ingest_runtime_log(request: RuntimeLogRequest):
     """
     try:
         artifact = pipeline.runtime.ingest_log(request.log)
-        return {"status": "success", "artifact": artifact.dict() if artifact else None}
+        if artifact and hasattr(artifact, "model_dump"):
+            payload = artifact.model_dump()
+        else:
+            payload = artifact.dict() if artifact else None
+        return {"status": "success", "artifact": payload}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -249,7 +274,8 @@ async def get_runtime_artifacts():
     chains = pipeline.runtime.get_execution_chains()
     hot_symbols = pipeline.runtime.get_hot_symbols()
     return {
-        "artifacts": [a.dict() for a in artifacts],
+        "artifacts": [a.model_dump() if hasattr(a, "model_dump") else a.dict() for a in artifacts],
+        "android_runtime_summary": pipeline.runtime.get_android_runtime_summary(),
         "execution_chains": chains,
         "hot_symbols": hot_symbols
     }
@@ -379,7 +405,24 @@ async def assemble_context(request: AssembleRequest):
         runtime_artifacts = pipeline.runtime.get_active_artifacts()
         selected_preset = _load_prompt_preset(request.selected_preset_id)
         executor_response_format = selected_preset.get("executor_response_format", "nexus_edits_v2")
-        selection_reason_lines = _build_selection_reason_lines_with_sources(candidates, request.selected_files, selection_sources)
+        context_related_paths = [f.rel_path for f in context.related_files]
+        selection_reason_lines = _build_selection_reason_lines_with_sources(candidates, context_related_paths, selection_sources)
+        android_briefing_lines: List[str] = []
+        android_context_evidence: List[str] = []
+        try:
+            android_summary = get_android_summary(Path(pipeline.root_path), runtime_analyzer=pipeline.runtime) if pipeline.root_path else None
+            if android_summary:
+                filtered_candidates = [c for c in candidates if c.file_metadata.rel_path in set(context_related_paths)]
+                android_briefing_lines, android_context_evidence = build_android_engineering_briefing(
+                    query=query,
+                    summary=android_summary,
+                    selected_files=context_related_paths,
+                    selected_candidates=filtered_candidates,
+                )
+        except Exception:
+            android_briefing_lines = []
+            android_context_evidence = []
+
         prompt = pipeline.prompt_builder.build_prompt(
             query,
             context,
@@ -390,6 +433,8 @@ async def assemble_context(request: AssembleRequest):
             preset_template=selected_preset.get("template"),
             selection_reasons=selection_reason_lines,
             executor_response_format=executor_response_format,
+            android_briefing_lines=android_briefing_lines,
+            android_context_evidence=android_context_evidence,
         )
         stats = _build_prompt_stats(prompt, context)
         active_reasons = [s.reason for s in (context.active_file.slices if context.active_file else [])]
@@ -423,6 +468,8 @@ async def assemble_context(request: AssembleRequest):
                 preset_template=selected_preset.get("template"),
                 selection_reasons=_build_selection_reason_lines_with_sources(filtered_candidates, request.selected_files, selection_sources),
                 executor_response_format=executor_response_format,
+                android_briefing_lines=android_briefing_lines,
+                android_context_evidence=android_context_evidence,
             )
             fallback_stats = _build_prompt_stats(fallback_prompt, fallback_context)
             fallback_active = [s.reason for s in (fallback_context.active_file.slices if fallback_context.active_file else [])]

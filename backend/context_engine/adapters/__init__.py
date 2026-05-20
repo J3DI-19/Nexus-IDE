@@ -15,6 +15,7 @@ from .languages.yaml_adapter import YAMLAdapter
 from .languages.toml_adapter import TOMLAdapter
 from .frameworks.fastapi_adapter import FastAPIAdapter
 from .frameworks.react_adapter import ReactAdapter
+from .frameworks.android_adapter import AndroidAdapter
 
 # Auto-register core adapters
 registry.register_language_adapter(PythonAdapter())
@@ -32,3 +33,4 @@ registry.register_language_adapter(YAMLAdapter())
 registry.register_language_adapter(TOMLAdapter())
 registry.register_framework_adapter(FastAPIAdapter())
 registry.register_framework_adapter(ReactAdapter())
+registry.register_framework_adapter(AndroidAdapter())

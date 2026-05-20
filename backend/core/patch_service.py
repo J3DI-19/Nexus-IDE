@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import re
 import time
-import ast
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from execution.verification import run_verification
+from execution.config import AndroidVerificationConfig
+from execution.verifiers.base import VerificationDiagnostic, VerificationMode
 
 Issue = Dict[str, Any]
 
@@ -185,22 +187,67 @@ class PatchService:
         intent_checks: dict[str, Any],
         mode: str,
     ) -> List[Issue]:
+        report = self.verify_applied_with_report(
+            root=root,
+            applied_changes=applied_changes,
+            intent_checks=intent_checks,
+            mode=mode,
+            verification_mode=VerificationMode.WARN,
+            config_diagnostics=None,
+        )
+        return report.get("blockers", [])
+
+    def verify_applied_with_report(
+        self,
+        root: Path,
+        applied_changes: List[PlannedChange],
+        intent_checks: dict[str, Any],
+        mode: str,
+        verification_mode: VerificationMode,
+        config_diagnostics: Optional[List[VerificationDiagnostic]] = None,
+        android_config: Optional[AndroidVerificationConfig] = None,
+    ) -> Dict[str, Any]:
         blockers: List[Issue] = []
-        for change in applied_changes:
-            target = (root / change.path).resolve()
-            if change.content is None:
-                if target.exists():
-                    blockers.append(self._issue("verify_failed", "error", path=change.path, details="file still exists after delete"))
+        warnings: List[Issue] = []
+        verification_summary = run_verification(
+            root=root,
+            applied_changes=applied_changes,
+            mode=verification_mode,
+            injected_diagnostics=config_diagnostics or [],
+            android_config=android_config,
+        )
+        for diagnostic in verification_summary.diagnostics:
+            details = diagnostic.details or diagnostic.message
+            if diagnostic.severity.lower() == "error":
+                blockers.append(
+                    self._issue(
+                        "verify_failed",
+                        "error",
+                        path=diagnostic.path,
+                        details=details,
+                    )
+                )
             else:
-                if not target.exists():
-                    blockers.append(self._issue("verify_failed", "error", path=change.path, details="file missing after apply"))
-                elif target.is_dir():
-                    blockers.append(self._issue("verify_failed", "error", path=change.path, details="path became directory"))
-                else:
-                    text = target.read_text(encoding="utf-8")
-                    syntax_issue = self._verify_syntax_for_path(change.path, text)
-                    if syntax_issue:
-                        blockers.append(self._issue("verify_failed", "error", path=change.path, details=syntax_issue))
+                warnings.append(
+                    self._issue(
+                        diagnostic.code,
+                        "warning",
+                        path=diagnostic.path,
+                        details=details,
+                    )
+                )
+
+        if not verification_summary.verification_passed:
+            blockers.append(
+                self._issue(
+                    "verification_policy_block",
+                    "error",
+                    details=(
+                        f"Verification mode '{verification_mode.value}' blocked apply "
+                        f"with state {verification_summary.state.value}."
+                    ),
+                )
+            )
 
         rendered = self._collect_rendered_text(root, applied_changes)
         assertion_blockers = self._evaluate_intent(intent_checks, rendered, mode=mode)
@@ -209,7 +256,11 @@ class PatchService:
                 blockers.append(self._issue("verify_failed", "error", details=b.get("details"), path=b.get("path")))
         if blockers:
             self._bump_metric("verify_fail_rate")
-        return blockers
+        return {
+            "blockers": blockers,
+            "warnings": warnings,
+            "verification": verification_summary.as_dict(),
+        }
 
     def rollback_changes(self, root: Path, applied_changes: List[PlannedChange]) -> bool:
         try:
@@ -294,6 +345,18 @@ class PatchService:
             if validation_blockers:
                 blocked_stage = blocked_stage or "validate"
             stage_timings["validate"] = round((time.perf_counter() - start) * 1000.0, 2)
+
+        # Guardrail: actionable patch modes should not pass with an empty edit plan.
+        if (
+            not blockers
+            and response_format == "nexus_edits_v2"
+            and parsed_payload is not None
+            and isinstance(parsed_payload.get("edits"), list)
+            and len(parsed_payload.get("edits", [])) == 0
+            and (mode or "").lower() in {"feature", "bugfix", "refactor"}
+        ):
+            blockers.append(self._issue("empty_edits", "error", details="Model returned no edits for an actionable task mode."))
+            blocked_stage = blocked_stage or "validate"
 
         # Explicit simulate stage: in-memory candidate output inspection before intent checks.
         start = time.perf_counter()
@@ -778,36 +841,133 @@ class PatchService:
         return text, repaired_any
 
     def _repair_key_value_quotes(self, raw: str, key: str) -> Tuple[str, bool]:
-        pattern = f"\"{key}\":\""
-        idx = 0
+        # Support whitespace-flexible patterns: `"new_text":"..."` and `"new_text" : "..."`
+        pattern = re.compile(rf'"{re.escape(key)}"\s*:\s*"')
         repaired = False
         out = raw
+        search_pos = 0
+
         while True:
-            start = out.find(pattern, idx)
-            if start == -1:
+            match = pattern.search(out, search_pos)
+            if not match:
                 break
-            cursor = start + len(pattern)
-            chars = list(out)
-            i = cursor
-            while i < len(chars):
-                ch = chars[i]
-                if ch == "\\":
-                    i += 2
-                    continue
-                if ch == "\"":
-                    j = i + 1
-                    while j < len(chars) and chars[j].isspace():
-                        j += 1
-                    if j < len(chars) and chars[j] in {",", "}"}:
-                        break
-                    chars.insert(i, "\\")
-                    repaired = True
-                    i += 2
-                    continue
-                i += 1
-            out = "".join(chars)
-            idx = i + 1
+
+            value_start = match.end()
+            repaired_value, close_idx, value_repaired = self._repair_json_string_value(out, value_start)
+            if close_idx < value_start:
+                # Could not confidently locate a closing quote; skip this match.
+                search_pos = match.end()
+                continue
+
+            out = out[:value_start] + repaired_value + out[close_idx:]
+            repaired = repaired or value_repaired
+            search_pos = value_start + len(repaired_value) + 1
+
         return out, repaired
+
+    def _repair_json_string_value(self, text: str, start: int) -> Tuple[str, int, bool]:
+        """
+        Repairs a JSON string value beginning right after the opening quote.
+        Returns (repaired_value_without_outer_quotes, closing_quote_index, repaired_flag).
+        If no safe closing quote is found, closing_quote_index < start is returned.
+        """
+        i = start
+        repaired = False
+        pieces: List[str] = []
+
+        while i < len(text):
+            ch = text[i]
+
+            if ch == "\\":
+                if i + 1 < len(text):
+                    # Keep valid escape sequence as-is.
+                    pieces.append(ch)
+                    pieces.append(text[i + 1])
+                    i += 2
+                    continue
+                # Trailing backslash in malformed payload; preserve and exit.
+                pieces.append(ch)
+                return "".join(pieces), i, repaired
+
+            if ch == "\"":
+                if self._is_probable_string_terminator(text, i):
+                    return "".join(pieces), i, repaired
+                # Otherwise this is an unescaped quote inside the value -> escape it.
+                pieces.append("\\\"")
+                repaired = True
+                i += 1
+                continue
+
+            # JSON strings cannot contain raw control chars.
+            if ch == "\n":
+                pieces.append("\\n")
+                repaired = True
+                i += 1
+                continue
+            if ch == "\r":
+                pieces.append("\\r")
+                repaired = True
+                i += 1
+                continue
+            if ch == "\t":
+                pieces.append("\\t")
+                repaired = True
+                i += 1
+                continue
+
+            pieces.append(ch)
+            i += 1
+
+        return "".join(pieces), -1, repaired
+
+    def _is_probable_string_terminator(self, text: str, quote_idx: int) -> bool:
+        """
+        Heuristic terminator detection for malformed JSON repair.
+        We only treat a quote as closing when the following structure looks like JSON syntax,
+        not source-code text embedded inside the value.
+        """
+        j = quote_idx + 1
+        while j < len(text) and text[j].isspace():
+            j += 1
+
+        if j >= len(text):
+            return True
+
+        marker = text[j]
+        if marker in {"}", "]"}:
+            k = j + 1
+            while k < len(text) and text[k].isspace():
+                k += 1
+            if k >= len(text):
+                return True
+            return text[k] in {",", "}", "]"}
+        if marker != ",":
+            return False
+
+        # For object strings, comma should typically be followed by another quoted key then ':'.
+        k = j + 1
+        while k < len(text) and text[k].isspace():
+            k += 1
+        if k >= len(text):
+            return True
+        if text[k] in {"}", "]"}:
+            return True
+        if text[k] != "\"":
+            return False
+
+        # Parse the potential key and verify a colon follows.
+        k += 1
+        while k < len(text):
+            if text[k] == "\\":
+                k += 2
+                continue
+            if text[k] == "\"":
+                k += 1
+                while k < len(text) and text[k].isspace():
+                    k += 1
+                return k < len(text) and text[k] == ":"
+            k += 1
+        return False
 
     def _extract_payload(self, raw_text: str, response_format: str) -> Tuple[str, bool]:
         text = raw_text or ""
@@ -904,17 +1064,6 @@ class PatchService:
     def _bump_metric(self, key: str) -> None:
         self._metrics[key] = self._metrics.get(key, 0) + 1
 
-    def _verify_syntax_for_path(self, rel_path: str, text: str) -> Optional[str]:
-        lower = rel_path.lower()
-        try:
-            if lower.endswith(".py"):
-                ast.parse(text)
-            elif lower.endswith(".json"):
-                json.loads(text)
-        except Exception as exc:
-            return f"syntax check failed: {exc}"
-        return None
-
     def _fix_suggestion(self, reason: str) -> str:
         mapping = {
             "invalid_json": "Return strict JSON only; escape quotes and newlines in string fields.",
@@ -922,11 +1071,15 @@ class PatchService:
             "unsupported_op": "Use one of: replace_range, insert_after, insert_before, create_file, delete_file.",
             "unsupported_edit_field": "Remove unknown edit keys and keep canonical nexus_edits_v2 fields only.",
             "missing_required_field": "Include all required fields for the chosen operation type.",
+            "empty_edits": "Regenerate with concrete edits; do not return an empty edit list for actionable modes.",
             "edit_mismatch": "Refresh file context and make old_text/anchor_text match the current file exactly.",
             "anchor_not_found": "Use a unique anchor_text that exists verbatim in the target file.",
             "unsafe_path": "Use workspace-relative file paths without traversal.",
             "intent_mismatch": "Align output with required intent checks from task semantics.",
             "verify_failed": "Re-run preview and correct syntax/semantic issues before applying again.",
+            "verification_policy_block": "Adjust executor verification mode or make all changed files pass verification.",
+            "verifier_unavailable": "Add a verifier for this file type or switch to WARN/OFF mode.",
+            "verification_skipped": "Use WARN/STRICT mode when syntax validation is required.",
         }
         return mapping.get(reason, "Resolve this issue and preview again.")
 

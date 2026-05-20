@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from typing import List, Dict
 from ..models.project import ProjectMetadata
+from ..android.detector import detect_android_project
 
 class ProjectClassifier:
     FRAMEWORK_ANALYTICS = {
@@ -28,10 +29,14 @@ class ProjectClassifier:
                     detected.add(framework)
                     break
 
+        android_detection = detect_android_project(root_path, all_files)
+
         return ProjectMetadata(
             root_path=str(root_path),
             project_name=root_path.name,
-            frameworks_detected=list(detected)
+            frameworks_detected=list(detected),
+            android_detected=android_detection.is_android_project,
+            android_detection_reasons=android_detection.reasons,
         )
 
     def _detect_fastapi(self, root_path: Path, all_files: List[str]) -> bool:

@@ -1,40 +1,38 @@
-# NEXUS IDE v1.0
+# NEXUS IDE
 
-NEXUS IDE is an open-source, local-first IDE focused on two core capabilities:
+NEXUS IDE is an open-source, local-first IDE built for deterministic AI-assisted development.
 
-- **Prompt Engine**: deterministic context retrieval + structured prompt assembly for external LLMs.
-- **Executor**: safe execution workflow with preview, local version history, restore, and undo.
+It focuses on two core systems:
 
-Licensed under the [MIT License](./LICENSE).
+- **Prompt Engine**: deterministic context retrieval and structured prompt assembly.
+- **Executor**: guarded code execution with preview, restore, undo, and local history.
+
+License: [MIT](./LICENSE)
 
 ## Why NEXUS IDE
 
-Most AI coding tools optimize for autonomous behavior. NEXUS IDE optimizes for:
+NEXUS IDE is designed for developers who want control, traceability, and safety in AI workflows.
 
-- deterministic and inspectable context
-- explicit safety checks before mutation
-- developer-controlled workflows
-- local operation without GitHub/remote dependency
+- Deterministic and inspectable context selection
+- Explicit safety checks before applying changes
+- Local-first operation without requiring cloud repository integration
+- Versioned execution flow with rollback support
 
-## Core Capabilities
+## Architecture
 
 ### Prompt Engine
 
-- Deterministic Context Engine (indexing, retrieval, extraction, prompt assembly)
-- Runtime and impact intelligence fed into context ranking
-- Structured engineering prompt generation with selected code slices
+- Project scan and metadata indexing
+- Symbol-aware retrieval and ranking
+- Runtime and impact signals for context quality
+- Structured engineering prompt generation
 
 ### Executor
 
-- Executor popup workflow with:
-  - file/project history timelines
-  - commit preview
-  - restore preview + conflict detection
-  - guarded force restore
-  - undo
-- Local-only Git-backed versioning with auto-init for non-git projects
-- Standardized API envelope for execution flows (`status`, `code`, `message`, `details`, `request_id`)
-- Default patch contract: `nexus_edits_v2` (unified diff available as fallback mode)
+- Preview-before-apply workflow
+- Restore and undo with conflict detection
+- Local Git-backed snapshot history
+- Standardized execution response envelope
 
 ## High-Level Flow
 
@@ -50,22 +48,17 @@ Project Scan
 
 ## Tech Stack
 
-### Backend
+- Backend: FastAPI, Python
+- Frontend: React, TypeScript, Vite, Monaco Editor
 
-- FastAPI
-- Python
-- Modular context engine + runtime analyzers
+## Getting Started
 
-### Frontend
+### Prerequisites
 
-- React
-- TypeScript
-- Vite
-- Monaco Editor
+- Python 3.10+
+- Node.js 18+ and npm
 
-## Setup
-
-### Backend
+### 1) Start Backend
 
 ```bash
 cd backend
@@ -73,13 +66,9 @@ pip install -r ../requirements.txt
 python main.py
 ```
 
-Backend URL:
+Backend runs at `http://localhost:8000`.
 
-```text
-http://localhost:8000
-```
-
-### Frontend
+### 2) Start Frontend
 
 ```bash
 cd frontend
@@ -87,42 +76,14 @@ npm install
 npm run dev
 ```
 
-Frontend URL:
+Frontend runs at `http://localhost:5173`.
 
-```text
-http://localhost:5173
-```
+## Repository Notes
 
-## Release Validation
+- Large local runtime bundles and temporary artifacts are intentionally excluded from version control.
+- If you need optional local runtimes, generate or install them in your own environment.
 
-### Frontend
-
-```bash
-cd frontend
-npm run test
-npm run build
-```
-
-### Backend (Python 3.10+ required)
-
-```bash
-python -m pytest -q backend/tests/test_history_api.py backend/tests/test_version_service.py
-```
-
-## Executor Safety Model
-
-- Preview before restore/apply
-- Deterministic patch pipeline: `parse -> normalize -> validate -> simulate -> intent_guard -> apply -> verify -> snapshot`
-- Apply is blocked by blockers only (warnings are non-blocking)
-- Intent assertions merged from task-derived + model-provided + user-provided checks
-- Conflict detection (`dirty_buffer`, `workspace_diverged`, `commit_not_found`, `missing_path`, `path_type_mismatch`, `restore_scope_mismatch`)
-- Explicit force-restore acknowledgement
-- Post-action reload prompt for editor-buffer sync
-- Post-apply verification with automatic rollback on semantic mismatch
-
-## `nexus_edits_v2` Contract
-
-Canonical shape:
+## `nexus_edits_v2` Patch Contract
 
 ```json
 {
@@ -138,7 +99,7 @@ Canonical shape:
 }
 ```
 
-Operation fields:
+Operation-specific fields:
 
 - `replace_range`: `old_text`, `new_text`
 - `insert_after` / `insert_before`: `anchor_text`, `new_text`

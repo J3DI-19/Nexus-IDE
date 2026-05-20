@@ -16,6 +16,7 @@ class RetrievalQuery(BaseModel):
     preferred_symbols: List[str] = Field(default_factory=list)
     framework_focus: Optional[str] = None
     include_slices: bool = False
+    android_context: Optional[Dict[str, Any]] = None
 
 from ..models.extraction import CodeSlice
 

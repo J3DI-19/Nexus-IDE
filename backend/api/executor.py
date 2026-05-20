@@ -8,6 +8,7 @@ from typing import Optional, List
 
 from core.patch_service import patch_service
 from core.version_service import version_service
+from execution.config import load_executor_verification_config
 from utils.api_response import err, log_route_end, log_route_start, ok, request_id_from
 from utils.security import get_project_root
 
@@ -113,12 +114,19 @@ async def apply_patch(request: Request, req: PatchApplyRequest):
             actor="user",
             metadata={"intent_checks": result.get("intent_checks", {})},
         )
-        verify_blockers = patch_service.verify_applied(
+        verification_config = load_executor_verification_config(root)
+        verification_report = patch_service.verify_applied_with_report(
             root,
             applied_changes,
             result.get("intent_checks", {}),
             mode=req.mode or "feature",
+            verification_mode=verification_config.mode,
+            config_diagnostics=verification_config.diagnostics,
+            android_config=verification_config.android,
         )
+        verify_blockers = verification_report.get("blockers", [])
+        verify_warnings = verification_report.get("warnings", [])
+        verification_payload = verification_report.get("verification", {})
         rollback_payload = {"attempted": False, "success": False}
 
         if verify_blockers:
@@ -149,8 +157,10 @@ async def apply_patch(request: Request, req: PatchApplyRequest):
                 "can_apply": False,
                 "verification_passed": False,
                 "blocked_stage": "verify",
+                "verification": verification_payload,
+                "warnings": result.get("warnings", []) + verify_warnings,
                 "blockers": result.get("blockers", []) + verify_blockers,
-                "issues": result.get("warnings", []) + result.get("blockers", []) + verify_blockers,
+                "issues": result.get("warnings", []) + verify_warnings + result.get("blockers", []) + verify_blockers,
                 "rollback": rollback_payload,
                 "operation_id": snapshot.operation_id,
                 "snapshot_id": snapshot.snapshot_id,
@@ -166,6 +176,8 @@ async def apply_patch(request: Request, req: PatchApplyRequest):
             "apply": {
                 **result,
                 "verification_passed": True,
+                "verification": verification_payload,
+                "warnings": result.get("warnings", []) + verify_warnings,
                 "rollback": rollback_payload,
                 "operation_id": snapshot.operation_id,
                 "snapshot_id": snapshot.snapshot_id,

@@ -49,7 +49,7 @@ class SymbolScorer:
         if s_name: breakdown.append(s_name)
         
         # 3. Task Intent
-        s_intent = self._score_intent(query, symbol)
+        s_intent = self._score_intent(query, symbol, file_path)
         if s_intent: breakdown.append(s_intent)
         
         return breakdown
@@ -119,16 +119,32 @@ class SymbolScorer:
                 )
         return None
 
-    def _score_intent(self, query: RetrievalQuery, symbol: Symbol) -> Optional[ScoreComponent]:
+    def _score_intent(self, query: RetrievalQuery, symbol: Symbol, file_path: str) -> Optional[ScoreComponent]:
         task_lower = query.task.lower()
         query_terms = set(_normalized_query_terms(query.task))
         sym_name_lower = symbol.name.lower()
+        file_lower = file_path.lower().replace("\\", "/")
+        is_android_layout = "/res/layout/" in file_lower and file_lower.endswith(".xml")
+
+        layout_name = ""
+        if is_android_layout:
+            layout_name = os.path.basename(file_lower).replace(".xml", "")
+            active_layout_refs = {
+                artifact.name
+                for artifact in self.index.get_artifacts_for_file(query.active_file or "")
+                if artifact.artifact_type == "ANDROID_LAYOUT_LINK"
+            }
+            in_active_scope = layout_name in active_layout_refs
+        else:
+            in_active_scope = True
         
         # Action-based intent matching
         actions = ["validate", "check", "parse", "process", "calculate", "save", "fetch", "render", "handle", "map", "transform", "normalize", "extract"]
         for action in actions:
             if (action in task_lower or action in query_terms) and action in sym_name_lower:
                 weight = 42.0 if query.mode == "refactor" and action in {"validate", "parse", "map", "transform", "normalize", "extract"} else 35.0
+                if is_android_layout and query.mode in {"bugfix", "refactor"}:
+                    weight = 20.0 if in_active_scope else 8.0
                 return ScoreComponent(
                     factor="Symbol Intent Match",
                     points=weight,
