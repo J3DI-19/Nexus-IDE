@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import json
 from pathlib import Path
 import os
+from typing import Optional
 from pydantic import BaseModel
 from fastapi import APIRouter
 
@@ -12,14 +15,14 @@ router = APIRouter()
 
 
 class RuntimeSettingsRequest(BaseModel):
-    python: str | None = None
-    node: str | None = None
-    java: str | None = None
-    gcc: str | None = None
-    gpp: str | None = None
-    dotnet: str | None = None
-    bash: str | None = None
-    powershell: str | None = None
+    python: Optional[str] = None
+    node: Optional[str] = None
+    java: Optional[str] = None
+    gcc: Optional[str] = None
+    gpp: Optional[str] = None
+    dotnet: Optional[str] = None
+    bash: Optional[str] = None
+    powershell: Optional[str] = None
 
 
 class RuntimeInstallRequest(BaseModel):
@@ -40,6 +43,7 @@ class PromptSettingsRequest(BaseModel):
     presets: list[PromptPreset]
     manual_file_add_enabled: bool = False
     allow_preset_change_in_preview: bool = True
+    executor_response_format: str = "nexus_edits_v2"
 
 
 def _prompt_settings_path() -> Path:
@@ -72,6 +76,7 @@ def _default_prompt_settings() -> dict:
         "selected_preset_id": "default",
         "manual_file_add_enabled": False,
         "allow_preset_change_in_preview": True,
+        "executor_response_format": "nexus_edits_v2",
         "presets": [
             {
                 "id": "default",
@@ -192,6 +197,7 @@ async def get_prompt_settings():
             "selected_preset_id": selected,
             "manual_file_add_enabled": bool(data.get("manual_file_add_enabled", False)),
             "allow_preset_change_in_preview": bool(data.get("allow_preset_change_in_preview", True)),
+            "executor_response_format": str(data.get("executor_response_format", "nexus_edits_v2")),
             "presets": presets,
         }
     except Exception:
@@ -200,6 +206,9 @@ async def get_prompt_settings():
 
 @router.post("/settings/prompts")
 async def update_prompt_settings(request: PromptSettingsRequest):
+    if request.executor_response_format not in {"unified_diff", "nexus_edits_v2"}:
+        return {"status": "error", "message": "Unsupported executor response format."}
+
     default_presets = [p for p in request.presets if p.isDefault]
     if len(default_presets) != 1 or default_presets[0].id != "default":
         return {"status": "error", "message": "Default preset must exist and stay locked."}
@@ -230,6 +239,7 @@ async def update_prompt_settings(request: PromptSettingsRequest):
         "selected_preset_id": request.selected_preset_id,
         "manual_file_add_enabled": request.manual_file_add_enabled,
         "allow_preset_change_in_preview": request.allow_preset_change_in_preview,
+        "executor_response_format": request.executor_response_format,
         "presets": [p.dict() for p in request.presets],
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

@@ -1,4 +1,5 @@
 from pathlib import Path
+import time
 
 import pytest
 
@@ -20,6 +21,7 @@ def test_rejects_non_allowlisted_host(tmp_path: Path):
       job = installer.get_job(job_id)
       if job.get("status") in {"failed", "completed"}:
           break
+      time.sleep(0.01)
     assert job["status"] == "failed"
     assert "allowlisted" in (job.get("error") or "").lower()
 
@@ -42,6 +44,7 @@ def test_checksum_validation_fails(tmp_path: Path, monkeypatch):
       job = installer.get_job(job_id)
       if job.get("status") in {"failed", "completed"}:
           break
+      time.sleep(0.01)
     assert job["status"] == "failed"
     assert "checksum mismatch" in (job.get("error") or "").lower()
 
@@ -66,4 +69,4 @@ def test_auto_writes_runtime_path_when_not_configured(tmp_path: Path, monkeypatc
     exe = target / "python.exe"
     exe.write_bytes(b"x")
     installer._update_runtime_config("python")
-    assert saved["python"].endswith("python/python.exe")
+    assert Path(saved["python"]).as_posix().endswith("python/python.exe")

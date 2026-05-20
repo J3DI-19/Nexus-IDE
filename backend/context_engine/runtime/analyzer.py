@@ -1,33 +1,40 @@
 from typing import List, Optional
+import threading
 from .models import RuntimeArtifact, RuntimeArtifactType
 from .detectors import RuntimeDetector
 
 class RuntimeAnalyzer:
     def __init__(self):
         self.detector = RuntimeDetector()
+        self._lock = threading.RLock()
         self._current_artifacts: List[RuntimeArtifact] = []
         self._diagnostic_versions = {}
 
     def ingest_log(self, log: str):
         artifact = self.detector.detect_and_parse(log)
         if artifact:
-            # Maintain a rolling buffer of top 5 artifacts
-            self._current_artifacts.insert(0, artifact)
-            self._current_artifacts = self._current_artifacts[:5]
+            with self._lock:
+                # Maintain a rolling buffer of top 5 artifacts
+                self._current_artifacts.insert(0, artifact)
+                self._current_artifacts = self._current_artifacts[:5]
         return artifact
 
     def get_active_artifacts(self) -> List[RuntimeArtifact]:
-        return self._current_artifacts
+        with self._lock:
+            return list(self._current_artifacts)
 
     def clear(self):
-        self._current_artifacts = []
+        with self._lock:
+            self._current_artifacts = []
+            self._diagnostic_versions = {}
 
     def replace_diagnostics_for_file(self, file_path: str, diagnostics: List[RuntimeArtifact], version: int = 0) -> bool:
         normalized = self._normalize_path(file_path)
-        current_version = self._diagnostic_versions.get(normalized, -1)
-        if version < current_version:
-            return False
-        self._diagnostic_versions[normalized] = version
+        with self._lock:
+            current_version = self._diagnostic_versions.get(normalized, -1)
+            if version < current_version:
+                return False
+            self._diagnostic_versions[normalized] = version
 
         def is_same_file_diagnostic(artifact: RuntimeArtifact) -> bool:
             is_diagnostic = (
@@ -43,16 +50,17 @@ class RuntimeAnalyzer:
                 return False
             return any(self._is_same_path(frame.file_path, normalized) for frame in artifact.frames)
 
-        self._current_artifacts = [
-            artifact for artifact in self._current_artifacts
-            if not is_same_file_diagnostic(artifact)
-        ]
+        with self._lock:
+            self._current_artifacts = [
+                artifact for artifact in self._current_artifacts
+                if not is_same_file_diagnostic(artifact)
+            ]
 
-        for artifact in reversed(diagnostics):
-            artifact.metadata["source"] = "live_diagnostics"
-            self._current_artifacts.insert(0, artifact)
+            for artifact in reversed(diagnostics):
+                artifact.metadata["source"] = "live_diagnostics"
+                self._current_artifacts.insert(0, artifact)
 
-        self._current_artifacts = self._current_artifacts[:10]
+            self._current_artifacts = self._current_artifacts[:10]
         return True
 
     def _normalize_path(self, file_path: str) -> str:
@@ -73,14 +81,14 @@ class RuntimeAnalyzer:
         
     def get_referenced_files(self) -> List[str]:
         files = set()
-        for art in self._current_artifacts:
+        for art in self.get_active_artifacts():
             for frame in art.frames:
                 files.add(frame.file_path)
         return list(files)
 
     def get_referenced_symbols(self) -> List[str]:
         symbols = set()
-        for art in self._current_artifacts:
+        for art in self.get_active_artifacts():
             for frame in art.frames:
                 if frame.symbol_name:
                     symbols.add(frame.symbol_name)
@@ -89,7 +97,7 @@ class RuntimeAnalyzer:
     def get_execution_chains(self) -> List[List[str]]:
         """Returns a list of execution chains (ordered list of file:symbol) from stack traces."""
         chains = []
-        for art in self._current_artifacts:
+        for art in self.get_active_artifacts():
             chain = []
             for frame in art.frames:
                 if frame.symbol_name:
@@ -103,7 +111,7 @@ class RuntimeAnalyzer:
     def get_hot_symbols(self) -> List[dict]:
         """Identifies volatile symbols that are currently part of failing execution paths."""
         hot_map = {}
-        for art in self._current_artifacts:
+        for art in self.get_active_artifacts():
             for i, frame in enumerate(art.frames):
                 if frame.symbol_name:
                     key = f"{frame.file_path}:{frame.symbol_name}"

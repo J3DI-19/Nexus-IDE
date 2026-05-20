@@ -38,6 +38,7 @@ class AdvancedPromptBuilder:
         preset_name: Optional[str] = None,
         preset_template: Optional[str] = None,
         selection_reasons: Optional[List[str]] = None,
+        executor_response_format: str = "unified_diff",
     ) -> str:
         """
         Orchestrates prompt composition using Jinja2 and adaptive token balancing.
@@ -110,8 +111,8 @@ class AdvancedPromptBuilder:
                 runtime_diagnostics=runtime_content,
                 active_file=active_file_content,
                 related_context="\n\n".join(related_sections),
-                rules=self._build_rules(mode),
-                response_contract=self._response_contract(mode),
+                rules=self._build_rules(mode, executor_response_format),
+                response_contract=self._response_contract(mode, executor_response_format),
                 active_file_path=active_file_path,
                 project_hierarchy_compact=hierarchy_block,
                 top_selection_reasons=selection_reason_lines,
@@ -156,7 +157,7 @@ class AdvancedPromptBuilder:
             return f"[Prompt Preset: {preset_name}]\n{rendered}"
         return rendered
 
-    def _build_rules(self, mode: PromptMode) -> str:
+    def _build_rules(self, mode: PromptMode, executor_response_format: str = "unified_diff") -> str:
         if mode == PromptMode.ARCHITECTURE:
             return "\n".join([
                 "You are a deterministic engineering analysis assistant.",
@@ -166,15 +167,49 @@ class AdvancedPromptBuilder:
                 "* Preserve exact existing styles, imports, and framework conventions in any referenced code.",
             ])
 
-        base_rules = [
-            "You are a deterministic code modification engine.",
-            "STRICT RULES:",
-            "* Output ONLY a valid unified diff patch.",
-            "* Do NOT include conversational text or markdown outside the diff.",
-            "* Preserve exact existing styles, imports, and framework conventions.",
-            "* Patch format MUST include standard unified diff markers ('---', '+++', '@@').",
-            "* If a safe patch cannot be produced from provided context, output an empty diff."
-        ]
+        if executor_response_format == "nexus_edits_v2":
+            base_rules = [
+                "You are a deterministic code modification engine.",
+                "STRICT RULES:",
+                "* FORMAT CONTRACT:",
+                "* Output ONLY valid JSON (no markdown fences, no prose).",
+                "* Response format MUST be exactly: {\"format\":\"nexus_edits_v2\",\"edits\":[...]}",
+                "* Each edit MUST be a flat object with keys: path, op, and operation-specific fields.",
+                "* Allowed op values: replace_range, insert_after, insert_before, create_file, delete_file.",
+                "* Use `path` (NOT `file`) and a flat `edits` list (NO nested `ops`).",
+                "* For replace_range: include old_text and new_text.",
+                "* For insert_after/insert_before: include anchor_text and new_text.",
+                "* For create_file: include new_text.",
+                "* For delete_file: include only path + op.",
+                "* Escape all JSON strings correctly (quotes as \\\" and newlines as \\n).",
+                "* INTENT CONTRACT:",
+                "* Enforce exact operator/token semantics from the task; do not substitute near-equivalent symbols.",
+                "* Example: when adding squaring in calculator flows, use literal `^2` in menu text and branch condition.",
+                "* EDIT STRATEGY CONTRACT:",
+                "* Keep edits minimal and surgical; avoid unrelated rewrites.",
+                "* For high-risk transformations (rename/API/import/config), preserve exact surrounding context in anchors/old_text.",
+                "* Preserve exact existing styles, imports, and framework conventions.",
+                "* If context is uncertain, return empty edits instead of speculative edits.",
+                "* If required context is missing or uncertain, return: {\"format\":\"nexus_edits_v2\",\"edits\":[]}.",
+            ]
+        else:
+            base_rules = [
+                "You are a deterministic code modification engine.",
+                "STRICT RULES:",
+                "* FORMAT CONTRACT:",
+                "* Output ONLY a valid unified diff patch.",
+                "* Do NOT include conversational text or markdown outside the diff.",
+                "* INTENT CONTRACT:",
+                "* Enforce exact operator/token semantics from the task; do not substitute near-equivalent symbols.",
+                "* Example: when adding squaring in calculator flows, use literal `^2` in menu text and branch condition.",
+                "* EDIT STRATEGY CONTRACT:",
+                "* Keep edits minimal and surgical; avoid unrelated rewrites.",
+                "* For high-risk transformations (rename/API/import/config), preserve exact surrounding context.",
+                "* Preserve exact existing styles, imports, and framework conventions.",
+                "* Patch format MUST include standard unified diff markers ('---', '+++', '@@').",
+                "* If context is uncertain, output an empty diff instead of speculative edits.",
+                "* If a safe patch cannot be produced from provided context, output an empty diff."
+            ]
         
         if mode == PromptMode.REFACTOR:
             base_rules.append("* Focus strictly on structural improvements without changing business logic.")
@@ -183,9 +218,11 @@ class AdvancedPromptBuilder:
             
         return "\n".join(base_rules)
 
-    def _response_contract(self, mode: PromptMode) -> str:
+    def _response_contract(self, mode: PromptMode, executor_response_format: str = "unified_diff") -> str:
         if mode == PromptMode.ARCHITECTURE:
             return "Respond with a concise structured analysis/briefing (not a patch)."
+        if executor_response_format == "nexus_edits_v2":
+            return "Your response must be ONLY valid JSON in nexus_edits_v2 format."
         return "Your response must be ONLY a valid unified diff patch."
 
     def _build_file_section(self, file: ExtractedFile, balancer: TokenBalancer, is_active: bool = False) -> str:

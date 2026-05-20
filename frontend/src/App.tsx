@@ -1,11 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Braces, FileText, Folder, LoaderCircle, PanelLeft, PanelRight, Play, Search, Terminal, X } from 'lucide-react';
-import Explorer from './components/Explorer';
-import Editor from './components/Editor';
-import RightPanel from './components/RightPanel';
-import TerminalPanel from './components/TerminalPanel';
 import ConfirmDialog from './components/ui/ConfirmDialog';
 import { buildTree, FileNode } from './utils/buildTree';
+
+const Explorer = lazy(() => import('./components/Explorer'));
+const Editor = lazy(() => import('./components/Editor'));
+const RightPanel = lazy(() => import('./components/RightPanel'));
+const TerminalPanel = lazy(() => import('./components/TerminalPanel'));
 
 const API_BASE = 'http://127.0.0.1:8000';
 
@@ -761,6 +762,7 @@ const App: React.FC = () => {
       />
       {/* ===== LEFT PANEL ===== */}
       {showExplorer && (
+        <Suspense fallback={<div className="sidebar flex flex-col h-full active-context"><div className="p-16 text-[10px] opacity-50 italic text-center">Loading...</div></div>}>
         <div className="sidebar flex flex-col h-full active-context">
           <div className="sidebar-header">
 
@@ -845,6 +847,7 @@ const App: React.FC = () => {
             )}
           </div>
         </div>
+        </Suspense>
       )}
 
       {/* ===== MAIN AREA ===== */}
@@ -1007,28 +1010,31 @@ const App: React.FC = () => {
 
         {/* ===== EDITOR ===== */}
         <div className="flex-1 overflow-hidden editor-workbench">
-          <Editor
-            activeTab={activeTab}
-            tabs={tabs}
-            onSelectTab={setActiveTabPath}
-            onCloseTab={handleCloseTab}
-            onContentChange={handleTabContentChange}
-          />
-          {shouldRenderTerminal && (
-            <TerminalPanel
-              key={terminalPanelKey}
-              sessionId={terminalSessionId}
-              visible={consoleOpen}
-              onSessionReady={handleTerminalSessionReady}
-              onSessionKilled={handleTerminalKilled}
-              onClose={() => setConsoleOpen(false)}
+          <Suspense fallback={<div className="p-16 text-[10px] opacity-50 italic text-center">Loading editor...</div>}>
+            <Editor
+              activeTab={activeTab}
+              tabs={tabs}
+              onSelectTab={setActiveTabPath}
+              onCloseTab={handleCloseTab}
+              onContentChange={handleTabContentChange}
             />
-          )}
+            {shouldRenderTerminal && (
+              <TerminalPanel
+                key={terminalPanelKey}
+                sessionId={terminalSessionId}
+                visible={consoleOpen}
+                onSessionReady={handleTerminalSessionReady}
+                onSessionKilled={handleTerminalKilled}
+                onClose={() => setConsoleOpen(false)}
+              />
+            )}
+          </Suspense>
         </div>
       </div>
 
       {/* ===== RIGHT PANEL ===== */}
       {showRightPanel && (
+        <Suspense fallback={<div className="right-panel flex flex-col"><div className="p-16 text-[10px] opacity-50 italic text-center">Loading intelligence...</div></div>}>
         <div className="right-panel flex flex-col">
           <div className="sidebar-header">
 
@@ -1052,8 +1058,10 @@ const App: React.FC = () => {
             isProjectLoaded={isProjectLoaded} 
             onFileSelect={handleFileSelect}
             workspaceFiles={searchableFiles.map((file) => ({ path: file.path, name: file.name }))}
+            dirtyPaths={dirtyPaths}
           />
         </div>
+        </Suspense>
       )}
 
     </div>

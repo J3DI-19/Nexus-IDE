@@ -32,7 +32,7 @@ class DefaultDeterministicStrategy(RetrievalStrategy):
     def execute(self, query: RetrievalQuery, index: IndexManager, runtime: Optional[RuntimeAnalyzer] = None) -> List[ContextCandidate]:
         candidates = []
         
-        for rel_path, metadata in index.files.items():
+        for rel_path, metadata in index.iter_files_items():
             if rel_path == query.active_file:
                 continue
                 
@@ -137,7 +137,7 @@ class SymbolCentricStrategy(RetrievalStrategy):
         candidates = []
         sym_scorer = SymbolScorer(index)
         
-        for rel_path, metadata in index.files.items():
+        for rel_path, metadata in index.iter_files_items():
             if rel_path == query.active_file:
                 continue
             
@@ -278,7 +278,7 @@ class DependencyOnlyStrategy(RetrievalStrategy):
         active_deps = index.get_dependencies(query.active_file)
         dep_paths = {d.target_id for d in active_deps if d.type == "import"}
         
-        for rel_path, metadata in index.files.items():
+        for rel_path, metadata in index.iter_files_items():
             # Check for matches in the import paths
             is_match = False
             for dp in dep_paths:

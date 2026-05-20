@@ -189,6 +189,12 @@ const TaskInput: React.FC<TaskInputProps> = ({
                   setMode(option.value);
                   beginCloseModeMenu();
                 }}
+                onMouseDown={(e) => {
+                  // Commit selection on press so mode doesn't get lost during focus/close transitions.
+                  e.preventDefault();
+                  setMode(option.value);
+                  beginCloseModeMenu();
+                }}
                 role="option"
                 aria-selected={mode === option.value}
                 aria-current={modeOptions[activeModeIndex]?.value === option.value}

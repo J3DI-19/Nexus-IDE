@@ -1,4 +1,6 @@
 from math_utils import add, subtract, multiply, divide
+
+
 def main():
     print("Simple Calculator")
 
@@ -18,7 +20,9 @@ def main():
     else:
         print("Invalid operation")
         return
+
     print("Result:", result)
+
 
 if __name__ == "__main__":
     main()

@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Tuple
 import json
 from pathlib import Path
+import os
 from utils.security import get_project_root, is_safe_path
 from context_engine.core.scanner import fast_recursive_scan
 from context_engine.core.pipeline import pipeline
@@ -108,6 +109,7 @@ def _validate_prompt_quality(
     stats: Dict[str, int],
     active_slice_reasons: List[str],
     selection_reasons: List[str],
+    executor_response_format: str = "nexus_edits_v2",
 ) -> Tuple[int, List[Dict[str, str]], List[Dict[str, str]]]:
     checks: List[Dict[str, str]] = []
     warnings: List[Dict[str, str]] = []
@@ -120,6 +122,8 @@ def _validate_prompt_quality(
     add_check("required_sections", all(s in prompt for s in ["### [SYSTEM RULES]", "### [PROJECT CONTEXT]", "### [TASK]"]), "Core sections must exist", "high")
     if mode == PromptMode.ARCHITECTURE:
         add_check("mode_contract", "structured analysis/briefing" in prompt and "ONLY a valid unified diff patch" not in prompt, "Architecture mode must use briefing contract", "high")
+    elif executor_response_format == "nexus_edits_v2":
+        add_check("mode_contract", "nexus_edits_v2" in prompt and "Output ONLY valid JSON" in prompt, "Patch modes must enforce nexus_edits_v2 contract", "high")
     else:
         add_check("mode_contract", "ONLY a valid unified diff patch" in prompt, "Patch modes must enforce unified diff contract", "high")
     tokens = stats.get("prompt_tokens", 0)
@@ -128,26 +132,38 @@ def _validate_prompt_quality(
     add_check("rationale_completeness", bool(selection_reasons), "Selection rationale should be present", "low")
     return max(0, min(100, score)), checks, warnings
 
+def _prompt_settings_path() -> Path:
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        return Path(appdata) / "NexusIDE" / "config" / "prompt_settings.json"
+    return Path.home() / ".nexuside" / "config" / "prompt_settings.json"
+
+
 def _load_prompt_preset(selected_preset_id: Optional[str]) -> Dict[str, str]:
-    settings_path = get_project_root() / "backend" / "config" / "prompt_settings.json"
+    settings_path = _prompt_settings_path()
     if not settings_path.exists():
-        return {}
+        settings_path = get_project_root() / "backend" / "config" / "prompt_settings.json"
+    if not settings_path.exists():
+        settings_path = get_project_root() / "backend" / "backend" / "config" / "prompt_settings.json"
+    if not settings_path.exists():
+        return {"executor_response_format": "nexus_edits_v2"}
     try:
         data = json.loads(settings_path.read_text(encoding="utf-8"))
         presets = data.get("presets", [])
         target_id = selected_preset_id or data.get("selected_preset_id")
         if not target_id:
-            return {}
+            return {"executor_response_format": str(data.get("executor_response_format", "nexus_edits_v2"))}
         preset = next((p for p in presets if p.get("id") == target_id), None)
         if not preset:
-            return {}
+            return {"executor_response_format": str(data.get("executor_response_format", "nexus_edits_v2"))}
         return {
             "id": str(preset.get("id", "")),
             "name": str(preset.get("name", "")),
             "template": str(preset.get("template", "")),
+            "executor_response_format": str(data.get("executor_response_format", "nexus_edits_v2")),
         }
     except Exception:
-        return {}
+        return {"executor_response_format": "nexus_edits_v2"}
 
 @router.get("/context/status")
 async def get_context_status():
@@ -362,6 +378,7 @@ async def assemble_context(request: AssembleRequest):
             
         runtime_artifacts = pipeline.runtime.get_active_artifacts()
         selected_preset = _load_prompt_preset(request.selected_preset_id)
+        executor_response_format = selected_preset.get("executor_response_format", "nexus_edits_v2")
         selection_reason_lines = _build_selection_reason_lines_with_sources(candidates, request.selected_files, selection_sources)
         prompt = pipeline.prompt_builder.build_prompt(
             query,
@@ -372,10 +389,11 @@ async def assemble_context(request: AssembleRequest):
             preset_name=selected_preset.get("name"),
             preset_template=selected_preset.get("template"),
             selection_reasons=selection_reason_lines,
+            executor_response_format=executor_response_format,
         )
         stats = _build_prompt_stats(prompt, context)
         active_reasons = [s.reason for s in (context.active_file.slices if context.active_file else [])]
-        quality_score, quality_checks, warnings = _validate_prompt_quality(prompt, mode, stats, active_reasons, selection_reason_lines)
+        quality_score, quality_checks, warnings = _validate_prompt_quality(prompt, mode, stats, active_reasons, selection_reason_lines, executor_response_format)
 
         low_auto = [c.file_metadata.rel_path for c in candidates if c.score < 15 and selection_sources.get(c.file_metadata.rel_path) == "auto_selected"]
         low_forced = [c.file_metadata.rel_path for c in candidates if c.score < 15 and selection_sources.get(c.file_metadata.rel_path) == "user_forced"]
@@ -404,11 +422,12 @@ async def assemble_context(request: AssembleRequest):
                 preset_name=selected_preset.get("name"),
                 preset_template=selected_preset.get("template"),
                 selection_reasons=_build_selection_reason_lines_with_sources(filtered_candidates, request.selected_files, selection_sources),
+                executor_response_format=executor_response_format,
             )
             fallback_stats = _build_prompt_stats(fallback_prompt, fallback_context)
             fallback_active = [s.reason for s in (fallback_context.active_file.slices if fallback_context.active_file else [])]
             fallback_score, fallback_checks, fallback_warnings = _validate_prompt_quality(
-                fallback_prompt, mode, fallback_stats, fallback_active, selection_reason_lines
+                fallback_prompt, mode, fallback_stats, fallback_active, selection_reason_lines, executor_response_format
             )
             if fallback_score >= quality_score:
                 prompt = fallback_prompt

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from api import scan, file, prompt, terminal, settings
+from api import scan, file, prompt, terminal, settings, history, executor
 from utils.security import set_project_root
 from pydantic import BaseModel
 
@@ -40,6 +40,8 @@ app.include_router(file.router)
 app.include_router(prompt.router)
 app.include_router(terminal.router)
 app.include_router(settings.router)
+app.include_router(history.router)
+app.include_router(executor.router)
 
 if __name__ == "__main__":
     import uvicorn
