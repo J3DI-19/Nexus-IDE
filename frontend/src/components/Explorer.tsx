@@ -201,7 +201,7 @@ const ExplorerNode: React.FC<{
             />
           ) : (
             <>
-              <span className="truncate">{node.name}</span>
+              <span className="explorer-label">{node.name}</span>
               {isDirty && <span className="explorer-dirty-indicator">●</span>}
             </>
           )}
@@ -360,7 +360,7 @@ const Explorer: React.FC<ExplorerProps> = ({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="explorer-tree-scroll">
         {isCreatingRoot && (
           <div className="explorer-item" style={{ paddingLeft: '10px' }}>
             <div className="explorer-arrow"></div>

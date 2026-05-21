@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, CheckCircle2, Database, FileCode, Layers, RefreshCw, Settings, Sparkles, Terminal, X, Zap } from 'lucide-react';
+import { Activity, CheckCircle2, ChevronDown, Database, FileCode, Layers, RefreshCw, Settings, Sparkles, Terminal, X, Zap } from 'lucide-react';
 import { Tab } from '../App';
 
 import TaskInput from './Intelligence/TaskInput';
@@ -280,6 +280,8 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
   const [manualPromptAddEnabled, setManualPromptAddEnabled] = useState(false);
   const [allowPresetChangeInPreview, setAllowPresetChangeInPreview] = useState(true);
   const [executorResponseFormat, setExecutorResponseFormat] = useState<'unified_diff' | 'nexus_edits_v2'>('nexus_edits_v2');
+  const [executorFormatOpen, setExecutorFormatOpen] = useState(false);
+  const [activeExecutorFormatIndex, setActiveExecutorFormatIndex] = useState(0);
   const [manualPromptSearch, setManualPromptSearch] = useState('');
   const [manualPromptFocusedIndex, setManualPromptFocusedIndex] = useState(0);
   const [executorOpen, setExecutorOpen] = useState(false);
@@ -304,7 +306,16 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
   const runtimeFetchInFlight = useRef(false);
   const runtimeFetchQueued = useRef(false);
   const diagnosticsVersionRef = useRef(0);
+  const executorFormatMenuRef = useRef<HTMLDivElement | null>(null);
+  const executorFormatCloseTimerRef = useRef<number | null>(null);
+  const executorFormatOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const selectedPreset = promptPresets.find((preset) => preset.id === selectedPromptPresetId) || promptPresets[0];
+  const executorFormatOptions = useMemo(() => ([
+    { value: 'unified_diff', label: 'Unified Diff (Legacy)' },
+    { value: 'nexus_edits_v2', label: 'Nexus JSON Edits v2 (Recommended)' },
+  ] as const), []);
+  const currentExecutorFormatIndex = Math.max(0, executorFormatOptions.findIndex((option) => option.value === executorResponseFormat));
+  const currentExecutorFormatLabel = executorFormatOptions[currentExecutorFormatIndex]?.label || 'Select format';
   const sortedRuntimeCatalog = useMemo(
     () =>
       [...runtimeCatalog].sort((a, b) => {
@@ -314,6 +325,74 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
       }),
     [runtimeCatalog]
   );
+
+  const openExecutorFormatMenu = () => {
+    setActiveExecutorFormatIndex(currentExecutorFormatIndex);
+    setExecutorFormatOpen(true);
+  };
+
+  const beginCloseExecutorFormatMenu = () => {
+    if (!executorFormatOpen) return;
+    if (executorFormatCloseTimerRef.current) {
+      window.clearTimeout(executorFormatCloseTimerRef.current);
+    }
+    setExecutorFormatOpen(false);
+    executorFormatCloseTimerRef.current = null;
+  };
+
+  const selectActiveExecutorFormat = () => {
+    const option = executorFormatOptions[activeExecutorFormatIndex];
+    if (!option) return;
+    setExecutorResponseFormat(option.value);
+    beginCloseExecutorFormatMenu();
+  };
+
+  const handleExecutorFormatMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      beginCloseExecutorFormatMenu();
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveExecutorFormatIndex((index) => Math.min(index + 1, executorFormatOptions.length - 1));
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveExecutorFormatIndex((index) => Math.max(index - 1, 0));
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      selectActiveExecutorFormat();
+    }
+  };
+
+  useEffect(() => {
+    if (!executorFormatOpen) return;
+
+    executorFormatOptionRefs.current[activeExecutorFormatIndex]?.focus();
+
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (executorFormatMenuRef.current && !executorFormatMenuRef.current.contains(event.target as Node)) {
+        if (executorFormatCloseTimerRef.current) {
+          window.clearTimeout(executorFormatCloseTimerRef.current);
+          executorFormatCloseTimerRef.current = null;
+        }
+        setExecutorFormatOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      if (executorFormatCloseTimerRef.current) {
+        window.clearTimeout(executorFormatCloseTimerRef.current);
+      }
+    };
+  }, [executorFormatOpen, activeExecutorFormatIndex, executorFormatOptions, beginCloseExecutorFormatMenu]);
 
   useEffect(() => {
     if (!selectedPreset) return;
@@ -1663,18 +1742,74 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                   <div className="settings-panel full-span">
                     <div className="settings-panel-title">Prompt context behavior</div>
                     <div className="settings-panel-copy">Global controls for Context Preview behavior.</div>
-                    <div className="runtime-setting-meta mt-2">
-                      <span className="runtime-setting-label">Executor Response Format</span>
-                      <span className="runtime-setting-hint">Choose the output format AI should return for surgical edits.</span>
+                    <div className="executor-format-card mt-2">
+                      <div className="runtime-setting-meta">
+                        <span className="runtime-setting-label">Executor Response Format</span>
+                        <span className="runtime-setting-hint">Choose the output format AI should return for surgical edits.</span>
+                      </div>
+                      <div className="task-mode-select-wrap executor-format-wrap" ref={executorFormatMenuRef}>
+                        <button
+                          className="task-mode-select executor-format-select"
+                          type="button"
+                          onClick={() => {
+                            if (executorFormatOpen) beginCloseExecutorFormatMenu();
+                            else openExecutorFormatMenu();
+                          }}
+                          onKeyDown={(e) => {
+                            if (!executorFormatOpen && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) {
+                              e.preventDefault();
+                              openExecutorFormatMenu();
+                            }
+                          }}
+                          aria-haspopup="listbox"
+                          aria-expanded={executorFormatOpen}
+                          aria-controls="executor-format-menu"
+                        >
+                          <span className="task-mode-select-label">{currentExecutorFormatLabel}</span>
+                          <ChevronDown size={12} className={`task-mode-select-icon ${executorFormatOpen ? 'open' : ''}`} />
+                        </button>
+
+                        {executorFormatOpen && (
+                          <div
+                            id="executor-format-menu"
+                            className="task-mode-menu executor-format-menu open"
+                            role="listbox"
+                            aria-label="Executor response format"
+                            tabIndex={-1}
+                            onKeyDown={handleExecutorFormatMenuKeyDown}
+                          >
+                            {executorFormatOptions.map((option) => {
+                              const optionIndex = executorFormatOptions.findIndex((entry) => entry.value === option.value);
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  className={`task-mode-option ${executorResponseFormat === option.value ? 'selected' : ''} ${optionIndex === activeExecutorFormatIndex ? 'active' : ''}`}
+                                  ref={(el) => {
+                                    executorFormatOptionRefs.current[optionIndex] = el;
+                                  }}
+                                  onClick={() => {
+                                    setExecutorResponseFormat(option.value);
+                                    beginCloseExecutorFormatMenu();
+                                  }}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    setExecutorResponseFormat(option.value);
+                                    beginCloseExecutorFormatMenu();
+                                  }}
+                                  role="option"
+                                  aria-selected={executorResponseFormat === option.value}
+                                  aria-current={optionIndex === activeExecutorFormatIndex}
+                                  onMouseEnter={() => setActiveExecutorFormatIndex(optionIndex)}
+                                >
+                                  {option.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <select
-                      className="runtime-setting-input executor-format-select"
-                      value={executorResponseFormat}
-                      onChange={(e) => setExecutorResponseFormat(e.target.value as 'unified_diff' | 'nexus_edits_v2')}
-                    >
-                      <option value="unified_diff">Unified Diff (Legacy)</option>
-                      <option value="nexus_edits_v2">Nexus JSON Edits v2 (Recommended)</option>
-                    </select>
                     <label className="manual-add-toggle switchy">
                       <input
                         type="checkbox"

@@ -101,6 +101,7 @@
 .explorer-node {
   display: flex;
   flex-direction: column;
+  min-width: max-content;
 }
 
 .explorer-item {
@@ -115,6 +116,8 @@
   margin: 0 6px;
   padding-right: 6px;
   transition: all 0.12s ease;
+  min-width: calc(100% - 12px);
+  width: max-content;
 }
 
 .explorer-item:hover {
@@ -165,10 +168,14 @@
   font-size: 12.5px;
   letter-spacing: 0.01em;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
   opacity: 0.72;
   transition: all 0.15s ease;
+}
+
+.explorer-label {
+  white-space: nowrap;
 }
 
 .explorer-item.dirty .explorer-name {
@@ -234,4 +241,11 @@
 .explorer-action-btn.delete:hover {
   background-color: rgba(255, 80, 80, 0.15);
   color: rgba(255, 120, 120, 1);
+}
+
+.explorer-tree-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable both-edges;
 }

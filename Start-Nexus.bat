@@ -1,5 +1,10 @@
 @echo off
 title Nexus IDE Launcher
+setlocal
+
+set "ROOT_DIR=%~dp0"
+set "FRONTEND_DIR=%ROOT_DIR%frontend"
+set "BACKEND_DIR=%ROOT_DIR%backend"
 
 echo =====================================
 echo        Starting Nexus IDE
@@ -12,13 +17,15 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr :5173') do taskkill /PID %%a 
 
 REM --- Start Backend ---
 echo Starting Backend (FastAPI)...
-cd backend
-start "Nexus Backend" cmd /k "python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000"
+start "Nexus Backend" cmd /k "cd /d ""%BACKEND_DIR%"" && python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000"
 
 REM --- Start Frontend ---
 echo Starting Frontend (Vite)...
-cd ../frontend
-start "Nexus Frontend" cmd /k "npm run dev"
+if exist "%FRONTEND_DIR%\node_modules\.bin\vite.cmd" (
+    start "Nexus Frontend" cmd /k "cd /d ""%FRONTEND_DIR%"" && npm run dev"
+) else (
+    start "Nexus Frontend" cmd /k "cd /d ""%FRONTEND_DIR%"" && echo Installing frontend dependencies... && npm install && npm run dev"
+)
 
 REM --- Wait ---
 echo Waiting for servers to start...

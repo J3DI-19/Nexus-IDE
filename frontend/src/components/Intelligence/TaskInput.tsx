@@ -30,7 +30,6 @@ const TaskInput: React.FC<TaskInputProps> = ({
   impactCandidates
 }) => {
   const [modeOpen, setModeOpen] = useState(false);
-  const [modeClosing, setModeClosing] = useState(false);
   const [activeModeIndex, setActiveModeIndex] = useState(0);
   const modeMenuRef = useRef<HTMLDivElement | null>(null);
   const closeTimerRef = useRef<number | null>(null);
@@ -51,21 +50,16 @@ const TaskInput: React.FC<TaskInputProps> = ({
 
   const openModeMenu = () => {
     setActiveModeIndex(currentModeIndex);
-    setModeClosing(false);
     setModeOpen(true);
   };
 
   const beginCloseModeMenu = () => {
     if (!modeOpen) return;
-    setModeClosing(true);
     if (closeTimerRef.current) {
       window.clearTimeout(closeTimerRef.current);
     }
-    closeTimerRef.current = window.setTimeout(() => {
-      setModeOpen(false);
-      setModeClosing(false);
-      closeTimerRef.current = null;
-    }, 120);
+    setModeOpen(false);
+    closeTimerRef.current = null;
   };
 
   const selectActiveMode = () => {
@@ -104,7 +98,11 @@ const TaskInput: React.FC<TaskInputProps> = ({
 
     const handleOutsideClick = (event: MouseEvent) => {
       if (modeMenuRef.current && !modeMenuRef.current.contains(event.target as Node)) {
-        beginCloseModeMenu();
+        if (closeTimerRef.current) {
+          window.clearTimeout(closeTimerRef.current);
+          closeTimerRef.current = null;
+        }
+        setModeOpen(false);
       }
     };
 
@@ -171,7 +169,7 @@ const TaskInput: React.FC<TaskInputProps> = ({
         {modeOpen && !loading && !disabled && (
           <div
             id="task-mode-menu"
-            className={`task-mode-menu ${modeClosing ? 'closing' : 'open'}`}
+            className="task-mode-menu open"
             role="listbox"
             aria-label="Goal mode"
             tabIndex={-1}
