@@ -1090,7 +1090,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     setExecutorTab('patch');
     setExecutorStatus('');
     setExecutorState('idle');
-    setExecutorBanner({ type: 'info', text: 'Paste AI output, auto-fetch payload if needed, then preview/apply.' });
+    setExecutorBanner(null);
     setForceAck(false);
     setShowReloadPrompt(false);
     if (activeTab?.path) {
@@ -1327,6 +1327,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
         setExecutorBanner({ type: 'success', text: `Applied patch. Snapshot ${apply.snapshot_id || 'not created'}. Verification passed.` });
         setPatchFlowOpen(true);
         setShowReloadPrompt(true);
+        window.dispatchEvent(new CustomEvent('nexus-refresh-open-tabs', { detail: { reason: 'patch-applied' } }));
         await openExecutor();
       } else {
         setExecutorState('failed');
@@ -2200,7 +2201,10 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                   {patchFlowOpen && (
                     <div className="panel-card executor-card mt-3">
                       <div className="executor-bubble-head">
-                        <div className="text-xs opacity-80">Preview Bubble</div>
+                        <div className="executor-bubble-head-left">
+                          <div className="text-xs opacity-80">Preview Bubble</div>
+                          <span className="executor-chip executor-head-chip">Paste AI output, auto-fetch payload if needed, then preview/apply.</span>
+                        </div>
                         <button className="modal-btn modal-btn-secondary" onClick={() => setPatchFlowDetailsOpen((v) => !v)} type="button">
                           {patchFlowDetailsOpen ? 'Hide Details' : 'Show Details'}
                         </button>
@@ -2221,7 +2225,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                         </div>
                       )}
                       {executorStatus && !executorStatus.startsWith('Preview:') && <div className="executor-badge-row mt-2"><span className="executor-chip">{executorStatus}</span></div>}
-                      {executorBanner && <div className="executor-badge-row mt-2"><span className={`executor-chip ${executorBanner.type === 'error' ? 'chip-error' : executorBanner.type === 'warning' ? 'chip-warning' : executorBanner.type === 'success' ? 'chip-success' : ''}`}>{executorBanner.text}</span></div>}
+                      {executorBanner && executorBanner.type !== 'info' && <div className="executor-badge-row mt-2"><span className={`executor-chip ${executorBanner.type === 'error' ? 'chip-error' : executorBanner.type === 'warning' ? 'chip-warning' : executorBanner.type === 'success' ? 'chip-success' : ''}`}>{executorBanner.text}</span></div>}
                       {patchFlowDetailsOpen && patchPreview?.warnings?.length ? (
                         <div className="executor-bubble-stack mt-2">
                           <div className="executor-inline-title">Warnings</div>
@@ -2244,8 +2248,10 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                       ) : null}
                       {patchFlowDetailsOpen && patchApplyResult && (
                         <div className="text-xs mt-2">
-                          <div>{executorBanner?.text || 'Patch flow completed.'}</div>
-                          <div>Verification: {patchApplyResult.verification_passed ? 'Passed' : 'Failed'}</div>
+                          <div>Patch flow completed.</div>
+                          <div className={patchApplyResult.verification_passed ? 'executor-chip executor-verification-bubble' : ''}>
+                            {patchApplyResult.verification_passed ? 'Verification Passed and Patch Applied' : 'Verification Failed'}
+                          </div>
                         </div>
                       )}
                     </div>

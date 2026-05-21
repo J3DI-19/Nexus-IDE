@@ -316,6 +316,53 @@ const App: React.FC = () => {
     scheduleLiveDiagnostics(path, newContent);
   };
 
+  const refreshOpenTabsFromDisk = useCallback(async () => {
+    if (!Array.isArray(tabs) || tabs.length === 0) return;
+    const cleanTabs = tabs.filter((tab) => !tab.isDirty);
+    if (!cleanTabs.length) return;
+
+    try {
+      const refreshed = await Promise.all(cleanTabs.map(async (tab) => {
+        const res = await fetch(`${API_BASE}/file?path=${encodeURIComponent(tab.path)}`);
+        if (!res.ok) return null;
+        const text = await res.text();
+        return { path: tab.path, text };
+      }));
+
+      const contentByPath = new Map(
+        refreshed
+          .filter((item): item is { path: string; text: string } => Boolean(item))
+          .map((item) => [item.path, item.text])
+      );
+
+      if (!contentByPath.size) return;
+
+      setTabs((prev) => {
+        if (!Array.isArray(prev)) return [];
+        return prev.map((tab) => {
+          if (tab.isDirty) return tab;
+          const nextText = contentByPath.get(tab.path);
+          if (typeof nextText !== 'string') return tab;
+          return { ...tab, content: nextText, savedContent: nextText, isDirty: false };
+        });
+      });
+
+      contentByPath.forEach((_, path) => {
+        window.dispatchEvent(new CustomEvent('nexus-runtime-updated', { detail: { path } }));
+      });
+    } catch (err) {
+      console.error('[IDE] Failed to refresh open tabs from disk', err);
+    }
+  }, [tabs]);
+
+  useEffect(() => {
+    const handleRefreshOpenTabs = () => {
+      void refreshOpenTabsFromDisk();
+    };
+    window.addEventListener('nexus-refresh-open-tabs', handleRefreshOpenTabs);
+    return () => window.removeEventListener('nexus-refresh-open-tabs', handleRefreshOpenTabs);
+  }, [refreshOpenTabsFromDisk]);
+
   const scheduleLiveDiagnostics = (path: string, content: string) => {
     if (diagnosticsTimers.current[path]) {
       window.clearTimeout(diagnosticsTimers.current[path]);
