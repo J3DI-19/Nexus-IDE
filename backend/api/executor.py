@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import logging
+import json
+import os
+from pathlib import Path
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from typing import Optional, List
 
+from core.executor_formats import resolve_executor_response_format
 from core.patch_service import patch_service
 from core.version_service import version_service
 from execution.config import load_executor_verification_config
@@ -16,9 +20,28 @@ router = APIRouter()
 logger = logging.getLogger("nexus.executor")
 
 
+def _prompt_settings_path() -> Path:
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        return Path(appdata) / "NexusIDE" / "config" / "prompt_settings.json"
+    return Path.home() / ".nexuside" / "config" / "prompt_settings.json"
+
+
+def _resolve_request_format(response_format: Optional[str]) -> str:
+    if response_format:
+        return resolve_executor_response_format(response_format)
+    try:
+        data = json.loads(_prompt_settings_path().read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return resolve_executor_response_format(data.get("executor_response_format"))
+    except Exception:
+        pass
+    return resolve_executor_response_format(None)
+
+
 class PatchPreviewRequest(BaseModel):
     raw_text: str
-    response_format: str = "nexus_edits_v2"
+    response_format: Optional[str] = None
     auto_extract: bool = False
     task: Optional[str] = None
     mode: str = "feature"
@@ -30,7 +53,7 @@ class PatchPreviewRequest(BaseModel):
 class PatchApplyRequest(BaseModel):
     raw_text: str
     selected_paths: Optional[List[str]] = None
-    response_format: str = "nexus_edits_v2"
+    response_format: Optional[str] = None
     auto_extract: bool = False
     task: Optional[str] = None
     mode: str = "feature"
@@ -41,7 +64,7 @@ class PatchApplyRequest(BaseModel):
 
 class PatchAutoFetchRequest(BaseModel):
     raw_text: str
-    response_format: str = "nexus_edits_v2"
+    response_format: Optional[str] = None
 
 
 @router.post("/executor/patch/preview")
@@ -50,10 +73,11 @@ async def preview_patch(request: Request, req: PatchPreviewRequest):
     started = log_route_start("/executor/patch/preview", rid)
     try:
         root = get_project_root()
+        response_format = _resolve_request_format(req.response_format)
         result = patch_service.preview(
             root,
             req.raw_text,
-            response_format=req.response_format,
+            response_format=response_format,
             auto_extract=req.auto_extract,
             task=req.task,
             mode=req.mode,
@@ -83,12 +107,13 @@ async def apply_patch(request: Request, req: PatchApplyRequest):
     started = log_route_start("/executor/patch/apply", rid)
     try:
         root = get_project_root()
+        response_format = _resolve_request_format(req.response_format)
         version_service.ensure_local_repo(root)
         result, changed_paths, applied_changes = patch_service.apply(
             root,
             req.raw_text,
             req.selected_paths,
-            response_format=req.response_format,
+            response_format=response_format,
             auto_extract=req.auto_extract,
             task=req.task,
             mode=req.mode,
@@ -196,7 +221,8 @@ async def autofetch_patch_payload(request: Request, req: PatchAutoFetchRequest):
     rid = request_id_from(request)
     started = log_route_start("/executor/patch/autofetch", rid)
     try:
-        normalized = patch_service.normalize_payload(req.raw_text, response_format=req.response_format, auto_extract=True)
+        response_format = _resolve_request_format(req.response_format)
+        normalized = patch_service.normalize_payload(req.raw_text, response_format=response_format, auto_extract=True)
         payload = ok({"autofetch": normalized}, request_id=rid)
         log_route_end("/executor/patch/autofetch", rid, started, True)
         return payload

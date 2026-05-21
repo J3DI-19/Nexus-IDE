@@ -8,17 +8,38 @@
 
 ---
 
+### [USER REQUEST]
+
+Goal: {{ task }}
+Task type: {{ mode|capitalize }}
+{% if not analysis_mode %}
+Use this exact goal in the Nexus Patch v1 Goal line.
+{% endif %}
+
+---
+
 ### [TASK]
 
 Goal: {{ task }}
+{% if analysis_mode %}
+Provide a technical analysis grounded in the provided context. Explain current behavior, risks, and recommendations without producing code-edit operations.
+{% else %}
 Modify ONLY what is necessary to achieve this goal. Avoid unrelated changes.
 {% if output_gate_line %}
 {{ output_gate_line }}
+{% endif %}
 {% endif %}
 
 {% if edit_starter_hints %}
 ### [EDIT STARTER HINTS]
 {% for line in edit_starter_hints[:6] %}
+- {{ line }}
+{% endfor %}
+{% endif %}
+
+{% if symbol_action_guidance_lines %}
+### [SYMBOL ACTION GUIDANCE]
+{% for line in symbol_action_guidance_lines[:8] %}
 - {{ line }}
 {% endfor %}
 {% endif %}
@@ -50,6 +71,16 @@ Follow ALL rules strictly. {{ response_contract }}
 
 {{ rules }}
 {{ missing_context_policy }}
+
+---
+
+### [USER REQUEST]
+
+Goal: {{ task }}
+Task type: {{ mode|capitalize }}
+{% if not analysis_mode %}
+Use this exact goal in the Nexus Patch v1 Goal line.
+{% endif %}
 
 ---
 
@@ -98,6 +129,13 @@ Selection Rationale:
 {% endfor %}
 {% endif %}
 
+{% if symbol_action_guidance_lines %}
+### [SYMBOL ACTION GUIDANCE]
+{% for line in symbol_action_guidance_lines %}
+- {{ line }}
+{% endfor %}
+{% endif %}
+
 {% if warnings %}
 ### [CRITICAL WARNINGS & CONSTRAINTS]
 {% for w in warnings %}
@@ -132,9 +170,13 @@ No active runtime errors.
 ### [TASK]
 
 Goal: {{ task }}
+{% if analysis_mode %}
+Provide a technical analysis grounded in the provided context. Explain current behavior, risks, and recommendations without producing code-edit operations.
+{% else %}
 Modify ONLY what is necessary to achieve this goal. Avoid unrelated changes.
 {% if output_gate_line %}
 {{ output_gate_line }}
+{% endif %}
 {% endif %}
 
 Follow ALL rules strictly. {{ response_contract }}

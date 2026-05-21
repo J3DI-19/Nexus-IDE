@@ -47,9 +47,10 @@ interface PromptSettingsResponse {
   selected_preset_id: string;
   manual_file_add_enabled?: boolean;
   allow_preset_change_in_preview?: boolean;
-  executor_response_format?: 'unified_diff' | 'nexus_edits_v2';
+  executor_response_format?: ExecutorResponseFormat;
   presets: PromptPreset[];
 }
+type ExecutorResponseFormat = 'nexus_patch_v1' | 'unified_diff' | 'json_edits';
 
 interface RuntimeSettings {
   python: string;
@@ -208,6 +209,7 @@ const blockerGuidance = (reason: string) => {
   const map: Record<string, string> = {
     invalid_json: 'Ensure the response is strict JSON with escaped quotes and no prose.',
     invalid_diff: 'Ensure the diff contains valid --- / +++ / @@ unified diff markers.',
+    parser_failed: 'Ensure the response matches the selected executor response format.',
     unsupported_op: 'Use only replace_range, insert_after, insert_before, create_file, delete_file.',
     unsupported_edit_field: 'Remove extra keys from edits; keep canonical schema only.',
     edit_mismatch: 'Refresh context and ensure old_text matches current file content exactly.',
@@ -279,7 +281,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
   const [editPresetTemplate, setEditPresetTemplate] = useState('');
   const [manualPromptAddEnabled, setManualPromptAddEnabled] = useState(false);
   const [allowPresetChangeInPreview, setAllowPresetChangeInPreview] = useState(true);
-  const [executorResponseFormat, setExecutorResponseFormat] = useState<'unified_diff' | 'nexus_edits_v2'>('nexus_edits_v2');
+  const [executorResponseFormat, setExecutorResponseFormat] = useState<ExecutorResponseFormat>('nexus_patch_v1');
   const [executorFormatOpen, setExecutorFormatOpen] = useState(false);
   const [activeExecutorFormatIndex, setActiveExecutorFormatIndex] = useState(0);
   const [manualPromptSearch, setManualPromptSearch] = useState('');
@@ -311,11 +313,18 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
   const executorFormatOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const selectedPreset = promptPresets.find((preset) => preset.id === selectedPromptPresetId) || promptPresets[0];
   const executorFormatOptions = useMemo(() => ([
-    { value: 'unified_diff', label: 'Unified Diff (Legacy)' },
-    { value: 'nexus_edits_v2', label: 'Nexus JSON Edits v2 (Recommended)' },
+    { value: 'nexus_patch_v1', label: 'Nexus Patch v1' },
+    { value: 'unified_diff', label: 'Unified Diff' },
+    { value: 'json_edits', label: 'JSON Edits' },
   ] as const), []);
   const currentExecutorFormatIndex = Math.max(0, executorFormatOptions.findIndex((option) => option.value === executorResponseFormat));
   const currentExecutorFormatLabel = executorFormatOptions[currentExecutorFormatIndex]?.label || 'Select format';
+  const executorFormatDisplay = currentExecutorFormatLabel;
+  const executorPayloadPlaceholder = executorResponseFormat === 'nexus_patch_v1'
+    ? 'Paste Nexus Patch v1 payload beginning with NEXUS_PATCH v1'
+    : executorResponseFormat === 'json_edits'
+      ? 'Paste JSON edits payload'
+      : 'Paste unified diff here (---, +++, @@ ...)';
   const sortedRuntimeCatalog = useMemo(
     () =>
       [...runtimeCatalog].sort((a, b) => {
@@ -340,11 +349,45 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
     executorFormatCloseTimerRef.current = null;
   };
 
+  const savePromptSettings = useCallback(async (nextPresets: PromptPreset[], nextSelectedId: string, nextExecutorFormat: ExecutorResponseFormat = executorResponseFormat) => {
+    setSettingsSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/settings/prompts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          selected_preset_id: nextSelectedId,
+          manual_file_add_enabled: manualPromptAddEnabled,
+          allow_preset_change_in_preview: allowPresetChangeInPreview,
+          executor_response_format: nextExecutorFormat,
+          presets: nextPresets
+        })
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || payload.status === 'error') {
+        throw new Error(payload.message || 'Failed to save prompt settings');
+      }
+      setSettingsFlash({ type: 'success', message: 'Prompt settings saved' });
+      window.setTimeout(() => setSettingsFlash(null), 1800);
+    } catch (err) {
+      console.error('Prompt settings save failed', err);
+      setSettingsFlash({ type: 'error', message: 'Could not save prompt settings' });
+      window.setTimeout(() => setSettingsFlash(null), 2200);
+    } finally {
+      setSettingsSaving(false);
+    }
+  }, [allowPresetChangeInPreview, manualPromptAddEnabled, executorResponseFormat]);
+
+  const applyExecutorFormatSelection = (value: ExecutorResponseFormat) => {
+    setExecutorResponseFormat(value);
+    beginCloseExecutorFormatMenu();
+    void savePromptSettings(promptPresets, selectedPromptPresetId, value);
+  };
+
   const selectActiveExecutorFormat = () => {
     const option = executorFormatOptions[activeExecutorFormatIndex];
     if (!option) return;
-    setExecutorResponseFormat(option.value);
-    beginCloseExecutorFormatMenu();
+    applyExecutorFormatSelection(option.value);
   };
 
   const handleExecutorFormatMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -516,7 +559,8 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
       setSelectedPromptPresetId(data.selected_preset_id || 'default');
       setManualPromptAddEnabled(Boolean(data.manual_file_add_enabled));
       setAllowPresetChangeInPreview(Boolean(data.allow_preset_change_in_preview ?? true));
-      setExecutorResponseFormat(data.executor_response_format === 'nexus_edits_v2' ? 'nexus_edits_v2' : 'unified_diff');
+      const format = data.executor_response_format;
+      setExecutorResponseFormat(format === 'unified_diff' || format === 'json_edits' || format === 'nexus_patch_v1' ? format : 'nexus_patch_v1');
     } catch (err) {
       console.error('Prompt settings fetch failed', err);
     }
@@ -542,35 +586,6 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
       setSettingsSaving(false);
     }
   }, [fetchRuntimeDiagnostics, runtimeSettings]);
-
-  const savePromptSettings = useCallback(async (nextPresets: PromptPreset[], nextSelectedId: string) => {
-    setSettingsSaving(true);
-    try {
-      const res = await fetch(`${API_BASE}/settings/prompts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          selected_preset_id: nextSelectedId,
-          manual_file_add_enabled: manualPromptAddEnabled,
-          allow_preset_change_in_preview: allowPresetChangeInPreview,
-          executor_response_format: executorResponseFormat,
-          presets: nextPresets
-        })
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok || payload.status === 'error') {
-        throw new Error(payload.message || 'Failed to save prompt settings');
-      }
-      setSettingsFlash({ type: 'success', message: 'Prompt presets saved' });
-      window.setTimeout(() => setSettingsFlash(null), 1800);
-    } catch (err) {
-      console.error('Prompt settings save failed', err);
-      setSettingsFlash({ type: 'error', message: 'Could not save prompt presets' });
-      window.setTimeout(() => setSettingsFlash(null), 2200);
-    } finally {
-      setSettingsSaving(false);
-    }
-  }, [allowPresetChangeInPreview, manualPromptAddEnabled, executorResponseFormat]);
 
   const flushActiveFileDiagnostics = useCallback(async () => {
     if (!activeTab) return;
@@ -1355,7 +1370,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
         return;
       }
       setPatchRawText(fetched.normalized_text);
-      if (fetched.detected_format === 'nexus_edits_v2' || fetched.detected_format === 'unified_diff') {
+      if (fetched.detected_format === 'json_edits' || fetched.detected_format === 'unified_diff' || fetched.detected_format === 'nexus_patch_v1') {
         setExecutorResponseFormat(fetched.detected_format);
       }
       setExecutorState('idle');
@@ -1789,13 +1804,11 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                                     executorFormatOptionRefs.current[optionIndex] = el;
                                   }}
                                   onClick={() => {
-                                    setExecutorResponseFormat(option.value);
-                                    beginCloseExecutorFormatMenu();
+                                    applyExecutorFormatSelection(option.value);
                                   }}
                                   onMouseDown={(e) => {
                                     e.preventDefault();
-                                    setExecutorResponseFormat(option.value);
-                                    beginCloseExecutorFormatMenu();
+                                    applyExecutorFormatSelection(option.value);
                                   }}
                                   role="option"
                                   aria-selected={executorResponseFormat === option.value}
@@ -2158,7 +2171,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                 <div className="panel-card executor-card">
                   <div className="executor-section-head">
                     <span className="executor-kicker">Patch Workspace</span>
-                    <span className="executor-subtle">Format: {executorResponseFormat === 'nexus_edits_v2' ? 'Nexus JSON Edits v2' : 'Unified Diff'}</span>
+                    <span className="executor-subtle">Format: {executorFormatDisplay}</span>
                   </div>
                   <div className="executor-label mt-2">Uncertain AI Output</div>
                   <textarea
@@ -2175,7 +2188,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                     className="runtime-setting-input settings-textarea mt-2"
                     value={patchRawText}
                     onChange={(e) => setPatchRawText(e.target.value)}
-                    placeholder={executorResponseFormat === 'nexus_edits_v2' ? 'Paste nexus_edits_v2 JSON payload' : 'Paste unified diff here (---, +++, @@ ...)'}
+                    placeholder={executorPayloadPlaceholder}
                   />
                   <div className="settings-actions compact mt-2">
                     <button className="modal-btn modal-btn-confirm default" onClick={() => setPatchFlowOpen(true)} disabled={!patchRawText.trim()} type="button">Open Preview Bubble</button>
@@ -2224,7 +2237,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ activeTab, isProjectLoaded, onF
                           <div className="executor-inline-title">Blockers</div>
                           <div className="executor-badge-row">
                             {patchPreview.blockers.map((item, idx) => (
-                              <span key={`${item.reason}-${idx}`} className="executor-chip chip-error">{item.reason}</span>
+                              <span key={`${item.reason}-${idx}`} className="executor-chip chip-error" title={item.fix_suggestion || blockerGuidance(item.reason)}>{item.reason}</span>
                             ))}
                           </div>
                         </div>

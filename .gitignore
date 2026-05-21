@@ -59,3 +59,10 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Local test artifacts
+backend/assembled_prompts/
+backend/assembled_prompts.json
+backend/tmp_write_test.txt
+test_workspaces/
+backend/tests/

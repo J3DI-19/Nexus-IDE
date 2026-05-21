@@ -7,6 +7,7 @@ from typing import Optional
 from pydantic import BaseModel
 from fastapi import APIRouter
 
+from core.executor_formats import resolve_executor_response_format, validate_executor_response_format
 from core.runtime_registry import RuntimeConfig, runtime_registry
 from core.runtime_installer import runtime_installer
 from utils.security import get_project_root
@@ -43,7 +44,7 @@ class PromptSettingsRequest(BaseModel):
     presets: list[PromptPreset]
     manual_file_add_enabled: bool = False
     allow_preset_change_in_preview: bool = True
-    executor_response_format: str = "nexus_edits_v2"
+    executor_response_format: str = "nexus_patch_v1"
 
 
 def _prompt_settings_path() -> Path:
@@ -76,7 +77,7 @@ def _default_prompt_settings() -> dict:
         "selected_preset_id": "default",
         "manual_file_add_enabled": False,
         "allow_preset_change_in_preview": True,
-        "executor_response_format": "nexus_edits_v2",
+        "executor_response_format": "nexus_patch_v1",
         "presets": [
             {
                 "id": "default",
@@ -197,7 +198,7 @@ async def get_prompt_settings():
             "selected_preset_id": selected,
             "manual_file_add_enabled": bool(data.get("manual_file_add_enabled", False)),
             "allow_preset_change_in_preview": bool(data.get("allow_preset_change_in_preview", True)),
-            "executor_response_format": str(data.get("executor_response_format", "nexus_edits_v2")),
+            "executor_response_format": resolve_executor_response_format(data.get("executor_response_format")),
             "presets": presets,
         }
     except Exception:
@@ -206,7 +207,9 @@ async def get_prompt_settings():
 
 @router.post("/settings/prompts")
 async def update_prompt_settings(request: PromptSettingsRequest):
-    if request.executor_response_format not in {"unified_diff", "nexus_edits_v2"}:
+    try:
+        executor_response_format = validate_executor_response_format(request.executor_response_format)
+    except ValueError:
         return {"status": "error", "message": "Unsupported executor response format."}
 
     default_presets = [p for p in request.presets if p.isDefault]
@@ -239,7 +242,7 @@ async def update_prompt_settings(request: PromptSettingsRequest):
         "selected_preset_id": request.selected_preset_id,
         "manual_file_add_enabled": request.manual_file_add_enabled,
         "allow_preset_change_in_preview": request.allow_preset_change_in_preview,
-        "executor_response_format": request.executor_response_format,
+        "executor_response_format": executor_response_format,
         "presets": [p.dict() for p in request.presets],
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

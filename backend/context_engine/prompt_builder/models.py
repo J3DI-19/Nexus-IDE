@@ -6,6 +6,7 @@ class PromptMode(str, Enum):
     FEATURE = "feature"
     BUGFIX = "bugfix"
     REFACTOR = "refactor"
+    ANALYSIS = "analysis"
     ARCHITECTURE = "architecture"
 
 class PromptSection(BaseModel):

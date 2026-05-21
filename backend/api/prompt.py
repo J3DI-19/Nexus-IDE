@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import os
 from utils.security import get_project_root, is_safe_path
+from core.executor_formats import resolve_executor_response_format
 from context_engine.core.scanner import fast_recursive_scan
 from context_engine.core.pipeline import pipeline
 from context_engine.android.briefing import build_android_engineering_briefing
@@ -111,7 +112,7 @@ def _validate_prompt_quality(
     stats: Dict[str, int],
     active_slice_reasons: List[str],
     selection_reasons: List[str],
-    executor_response_format: str = "nexus_edits_v2",
+    executor_response_format: str = "nexus_patch_v1",
 ) -> Tuple[int, List[Dict[str, str]], List[Dict[str, str]]]:
     checks: List[Dict[str, str]] = []
     warnings: List[Dict[str, str]] = []
@@ -124,8 +125,10 @@ def _validate_prompt_quality(
     add_check("required_sections", all(s in prompt for s in ["### [SYSTEM RULES]", "### [PROJECT CONTEXT]", "### [TASK]"]), "Core sections must exist", "high")
     if mode == PromptMode.ARCHITECTURE:
         add_check("mode_contract", "structured analysis/briefing" in prompt and "ONLY a valid unified diff patch" not in prompt, "Architecture mode must use briefing contract", "high")
-    elif executor_response_format == "nexus_edits_v2":
-        add_check("mode_contract", "nexus_edits_v2" in prompt and "Output ONLY valid JSON" in prompt, "Patch modes must enforce nexus_edits_v2 contract", "high")
+    elif executor_response_format == "nexus_patch_v1":
+        add_check("mode_contract", "NEXUS_PATCH v1" in prompt and "<Patch>" in prompt, "Patch modes must enforce Nexus Patch v1 contract", "high")
+    elif executor_response_format == "json_edits":
+        add_check("mode_contract", "nexus_edits_v2" in prompt and "Output ONLY valid JSON" in prompt, "Patch modes must enforce JSON edits contract", "high")
     else:
         add_check("mode_contract", "ONLY a valid unified diff patch" in prompt, "Patch modes must enforce unified diff contract", "high")
     tokens = stats.get("prompt_tokens", 0)
@@ -148,24 +151,24 @@ def _load_prompt_preset(selected_preset_id: Optional[str]) -> Dict[str, str]:
     if not settings_path.exists():
         settings_path = get_project_root() / "backend" / "backend" / "config" / "prompt_settings.json"
     if not settings_path.exists():
-        return {"executor_response_format": "nexus_edits_v2"}
+        return {"executor_response_format": "nexus_patch_v1"}
     try:
         data = json.loads(settings_path.read_text(encoding="utf-8"))
         presets = data.get("presets", [])
         target_id = selected_preset_id or data.get("selected_preset_id")
         if not target_id:
-            return {"executor_response_format": str(data.get("executor_response_format", "nexus_edits_v2"))}
+            return {"executor_response_format": resolve_executor_response_format(data.get("executor_response_format"))}
         preset = next((p for p in presets if p.get("id") == target_id), None)
         if not preset:
-            return {"executor_response_format": str(data.get("executor_response_format", "nexus_edits_v2"))}
+            return {"executor_response_format": resolve_executor_response_format(data.get("executor_response_format"))}
         return {
             "id": str(preset.get("id", "")),
             "name": str(preset.get("name", "")),
             "template": str(preset.get("template", "")),
-            "executor_response_format": str(data.get("executor_response_format", "nexus_edits_v2")),
+            "executor_response_format": resolve_executor_response_format(data.get("executor_response_format")),
         }
     except Exception:
-        return {"executor_response_format": "nexus_edits_v2"}
+        return {"executor_response_format": "nexus_patch_v1"}
 
 @router.get("/context/status")
 async def get_context_status():
@@ -404,7 +407,7 @@ async def assemble_context(request: AssembleRequest):
             
         runtime_artifacts = pipeline.runtime.get_active_artifacts()
         selected_preset = _load_prompt_preset(request.selected_preset_id)
-        executor_response_format = selected_preset.get("executor_response_format", "nexus_edits_v2")
+        executor_response_format = resolve_executor_response_format(selected_preset.get("executor_response_format"))
         context_related_paths = [f.rel_path for f in context.related_files]
         selection_reason_lines = _build_selection_reason_lines_with_sources(candidates, context_related_paths, selection_sources)
         android_briefing_lines: List[str] = []

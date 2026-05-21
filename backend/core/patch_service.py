@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import py_compile
 import re
 import time
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -10,6 +12,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from execution.verification import run_verification
 from execution.config import AndroidVerificationConfig
 from execution.verifiers.base import VerificationDiagnostic, VerificationMode
+from core.executor_formats import resolve_executor_response_format
+from execution.nexus_patch_v1.parser import parse_nexus_patch
+from execution.nexus_patch_v1.planner import plan_nexus_patch
+from context_engine.core.scanner import fast_recursive_scan, compute_file_hash
+from context_engine.adapters.registry import registry
+from context_engine.index.manager import IndexManager
+from context_engine.index.resolver import GraphResolver
+from context_engine.models.file import FileMetadata
+from context_engine.models.extraction import ExtractionResult
 
 Issue = Dict[str, Any]
 
@@ -50,19 +61,21 @@ class PatchService:
             "rollback_rate": 0,
             "warning_only_apply_rate": 0,
         }
+        self._workspace_index_cache: Dict[str, IndexManager] = {}
 
     def normalize_payload(self, raw_text: str, response_format: str = "unified_diff", auto_extract: bool = False) -> dict[str, Any]:
         warnings: List[Issue] = []
         text = raw_text or ""
-        detected_format = response_format
+        selected_format = resolve_executor_response_format(response_format)
+        detected_format = selected_format
 
         if auto_extract:
-            extracted, found = self._extract_payload(text, response_format)
+            extracted, found = self._extract_payload(text, selected_format)
             if found:
                 text = extracted
                 warnings.append(self._issue("auto_extracted_payload", "warning"))
 
-        if response_format == "nexus_edits_v2":
+        if selected_format == "json_edits":
             text, repaired = self._repair_unescaped_quotes(text)
             if repaired:
                 warnings.append(self._issue("repaired_unescaped_quotes", "warning"))
@@ -134,7 +147,7 @@ class PatchService:
             return pipeline, [], []
 
         selected_set = {self._normalize_rel_path(path) for path in (selected_paths or []) if path}
-        changes_to_apply = [c for c in planned_changes if not selected_set or c.path in selected_set]
+        changes_to_apply = [c for c in planned_changes if not selected_set or self._planned_change_selected(c, selected_set)]
         if not changes_to_apply:
             result = {
                 **pipeline,
@@ -148,29 +161,63 @@ class PatchService:
 
         results: List[Dict[str, str]] = []
         changed_paths: List[str] = []
+        applied_changes: List[PlannedChange] = []
         try:
             for change in changes_to_apply:
                 target = (root / change.path).resolve()
                 if not self._is_within_root(root, target):
                     raise RuntimeError("unsafe path outside workspace")
 
-                if change.content is None:
+                if change.operation == "rename_file":
+                    if not change.content:
+                        raise RuntimeError("rename_file missing destination path")
+                    destination = (root / change.content).resolve()
+                    if not self._is_within_root(root, destination):
+                        raise RuntimeError("unsafe rename destination outside workspace")
+                    if not target.exists():
+                        raise RuntimeError("rename source missing")
+                    if destination.exists():
+                        raise RuntimeError("rename destination already exists")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    target.rename(destination)
+                    results.append({"path": f"{change.path} -> {change.content}", "status": "renamed"})
+                    changed_paths.extend([change.path, change.content])
+                    applied_changes.append(change)
+                elif change.content is None:
                     if target.exists():
                         target.unlink()
                     results.append({"path": change.path, "status": "deleted"})
+                    changed_paths.append(change.path)
+                    applied_changes.append(change)
                 else:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(change.content, encoding="utf-8")
                     status = "created" if change.operation == "create_file" else "updated"
                     results.append({"path": change.path, "status": status})
-                changed_paths.append(change.path)
+                    changed_paths.append(change.path)
+                    applied_changes.append(change)
+            syntax_blockers = self._validate_python_syntax(root, applied_changes)
+            if syntax_blockers:
+                rollback_success = self.rollback_changes(root, applied_changes)
+                result = {
+                    **pipeline,
+                    "results": results,
+                    "can_apply": False,
+                    "blockers": syntax_blockers,
+                    "blocked_stage": "apply",
+                    "rollback": {"attempted": bool(applied_changes), "success": rollback_success},
+                }
+                result["issues"] = result.get("warnings", []) + result.get("blockers", [])
+                return result, [], []
         except Exception as exc:
+            rollback_success = self.rollback_changes(root, applied_changes) if applied_changes else False
             result = {
                 **pipeline,
                 "results": results,
                 "can_apply": False,
                 "blockers": [self._issue("apply_failed", "error", details=str(exc))],
                 "blocked_stage": "apply",
+                "rollback": {"attempted": bool(applied_changes), "success": rollback_success},
             }
             result["issues"] = result.get("warnings", []) + result.get("blockers", [])
             return result, [], []
@@ -264,7 +311,20 @@ class PatchService:
 
     def rollback_changes(self, root: Path, applied_changes: List[PlannedChange]) -> bool:
         try:
-            for change in applied_changes:
+            for change in reversed(applied_changes):
+                if change.operation == "rename_file":
+                    source = (root / change.path).resolve()
+                    destination = (root / (change.content or "")).resolve()
+                    if source.exists():
+                        if source.is_dir():
+                            raise RuntimeError("Cannot rollback rename because source path is occupied by a directory.")
+                        source.unlink()
+                    if destination.exists():
+                        destination.rename(source)
+                    if change.original_content is not None:
+                        source.parent.mkdir(parents=True, exist_ok=True)
+                        source.write_text(change.original_content, encoding="utf-8")
+                    continue
                 target = (root / change.path).resolve()
                 if change.original_content is None:
                     if target.exists():
@@ -301,34 +361,49 @@ class PatchService:
         stats = {"additions": 0, "deletions": 0}
 
         start = time.perf_counter()
-        normalized = self.normalize_payload(raw_text, response_format=response_format, auto_extract=auto_extract)
+        selected_format = resolve_executor_response_format(response_format)
+        normalized = self.normalize_payload(raw_text, response_format=selected_format, auto_extract=auto_extract)
         stage_timings["normalize"] = round((time.perf_counter() - start) * 1000.0, 2)
         warnings.extend(normalized.get("issues", []))
         normalized_text = normalized.get("normalized_text", "")
 
         start = time.perf_counter()
         parsed_payload: Optional[dict[str, Any]] = None
-        if response_format == "nexus_edits_v2":
+        parsed_nexus_patch = None
+        if selected_format == "json_edits":
             try:
                 parsed_payload = json.loads(normalized_text)
             except Exception as exc:
-                blockers.append(self._issue("invalid_json", "error", details=str(exc)))
+                blockers.append(self._issue("parser_failed", "error", details=str(exc), selected_format="json_edits"))
                 blocked_stage = "parse"
                 self._bump_metric("parse_fail_rate")
+        elif selected_format == "nexus_patch_v1":
+            parsed_nexus_patch, parse_issues = parse_nexus_patch(normalized_text)
+            if parse_issues:
+                for issue in parse_issues:
+                    payload = issue.as_issue()
+                    payload["selected_format"] = "nexus_patch_v1"
+                    if issue.severity == "error":
+                        blockers.append(payload)
+                    else:
+                        warnings.append(payload)
+                if any(issue.severity == "error" for issue in parse_issues):
+                    blocked_stage = "parse"
+                    self._bump_metric("parse_fail_rate")
         else:
             try:
                 parsed_payload = self._parse_unified_diff(normalized_text)
             except ValueError as exc:
-                blockers.append(self._issue("invalid_diff", "error", details=str(exc)))
+                blockers.append(self._issue("parser_failed", "error", details=str(exc), selected_format="unified_diff"))
                 blocked_stage = "parse"
                 self._bump_metric("parse_fail_rate")
         stage_timings["parse"] = round((time.perf_counter() - start) * 1000.0, 2)
 
         payload_assertions = {"assert_contains": [], "assert_not_contains": []}
         validation_blockers: List[Issue] = []
-        if not blockers and parsed_payload is not None:
+        if not blockers and (parsed_payload is not None or parsed_nexus_patch is not None):
             start = time.perf_counter()
-            if response_format == "nexus_edits_v2":
+            if selected_format == "json_edits":
                 (
                     planned_changes,
                     files_summary,
@@ -339,6 +414,25 @@ class PatchService:
                 ) = self._plan_nexus_changes(root, parsed_payload)
                 warnings.extend(validation_warnings)
                 blockers.extend(validation_blockers)
+            elif selected_format == "nexus_patch_v1" and parsed_nexus_patch is not None:
+                index = self._get_index_for_workspace(root)
+                v1_changes, files_summary, stats, v1_issues = plan_nexus_patch(root, parsed_nexus_patch, index=index)
+                planned_changes = [
+                    PlannedChange(
+                        path=change.path,
+                        content=change.content,
+                        operation=change.operation,
+                        original_content=change.original_content,
+                    )
+                    for change in v1_changes
+                ]
+                validation_blockers = [issue.as_issue() for issue in v1_issues if issue.severity == "error"]
+                validation_warnings = [issue.as_issue() for issue in v1_issues if issue.severity != "error"]
+                blockers.extend(validation_blockers)
+                warnings.extend(validation_warnings)
+                if not validation_blockers and not planned_changes:
+                    blockers.append(self._issue("no_changes", "error", details="Nexus Patch contained no operations to apply."))
+                    blocked_stage = blocked_stage or "validate"
             else:
                 planned_changes, files_summary, stats, validation_blockers = self._plan_unified_diff_changes(root, parsed_payload)
                 blockers.extend(validation_blockers)
@@ -349,7 +443,7 @@ class PatchService:
         # Guardrail: actionable patch modes should not pass with an empty edit plan.
         if (
             not blockers
-            and response_format == "nexus_edits_v2"
+            and selected_format == "json_edits"
             and parsed_payload is not None
             and isinstance(parsed_payload.get("edits"), list)
             and len(parsed_payload.get("edits", [])) == 0
@@ -396,6 +490,69 @@ class PatchService:
             "stage_timings_ms": stage_timings,
             "_planned_changes": planned_changes,
         }
+
+    def _get_index_for_workspace(self, root: Path) -> Optional[IndexManager]:
+        """
+        Build a symbol/dependency index scoped to the workspace currently being previewed/applied.
+        This avoids cross-root mismatch where prompt-time symbols are visible but executor-time
+        symbol resolution queries a stale/different global index.
+        """
+        try:
+            root_resolved = root.resolve()
+            key = str(root_resolved)
+            cached = self._workspace_index_cache.get(key)
+            if cached is not None:
+                return cached
+
+            # Ensure adapter auto-registration side effects have run.
+            # noqa import for side-effect registration of language/framework adapters.
+            import context_engine.adapters  # type: ignore # noqa: F401
+
+            index = IndexManager()
+            all_files = fast_recursive_scan(str(root_resolved))
+            for rel_path in all_files:
+                abs_path = (root_resolved / rel_path).resolve()
+                if not abs_path.is_file():
+                    continue
+                adapter = registry.get_adapter_for_file(rel_path)
+                if adapter is None:
+                    continue
+                try:
+                    with open(abs_path, "r", encoding="utf-8", errors="ignore") as handle:
+                        content = handle.read()
+                except Exception:
+                    continue
+                symbols = adapter.extract_symbols(content, rel_path)
+                deps = adapter.extract_dependencies(content, rel_path)
+                ext = os.path.splitext(rel_path)[1].lower().lstrip(".")
+                metadata = FileMetadata(
+                    rel_path=rel_path,
+                    hash=compute_file_hash(str(abs_path)),
+                    last_modified=os.path.getmtime(abs_path),
+                    language=ext,
+                    classification="source",
+                )
+                index.register_extraction_result(
+                    ExtractionResult(
+                        file_metadata=metadata,
+                        symbols=symbols,
+                        dependency_edges=deps,
+                        artifacts=[],
+                    )
+                )
+            # Resolve dependency graph edges for parity with pipeline-built indexes.
+            GraphResolver(index).resolve_graph()
+            self._workspace_index_cache[key] = index
+            return index
+        except Exception:
+            return None
+
+    def _planned_change_selected(self, change: PlannedChange, selected_set: set[str]) -> bool:
+        if change.path in selected_set:
+            return True
+        if change.operation == "rename_file" and change.content:
+            return self._normalize_rel_path(change.content) in selected_set
+        return False
 
     def _compile_assertions(
         self,
@@ -971,8 +1128,14 @@ class PatchService:
 
     def _extract_payload(self, raw_text: str, response_format: str) -> Tuple[str, bool]:
         text = raw_text or ""
-        if response_format == "unified_diff":
+        selected_format = resolve_executor_response_format(response_format)
+        if selected_format == "unified_diff":
             match = re.search(r"(?ms)^--- .*$", text)
+            if match:
+                return text[match.start():].strip(), True
+            return text, False
+        if selected_format == "nexus_patch_v1":
+            match = re.search(r"(?ms)^NEXUS_PATCH\s+v1\s*$", text)
             if match:
                 return text[match.start():].strip(), True
             return text, False
@@ -1012,12 +1175,53 @@ class PatchService:
     def _collect_rendered_text(self, root: Path, changes: List[PlannedChange]) -> str:
         blocks: List[str] = []
         for change in changes:
-            target = (root / change.path).resolve()
+            rendered_path = self._rendered_path_for_change(change)
+            target = (root / rendered_path).resolve()
             if not target.exists() or target.is_dir():
                 continue
             text = target.read_text(encoding="utf-8")
-            blocks.append(f"### {change.path}\n{text}")
+            blocks.append(f"### {rendered_path}\n{text}")
         return "\n".join(blocks)
+
+    def _rendered_path_for_change(self, change: PlannedChange) -> str:
+        if change.operation == "rename_file" and change.content:
+            return self._normalize_rel_path(change.content)
+        return change.path
+
+    def _validate_python_syntax(self, root: Path, changes: List[PlannedChange]) -> List[Issue]:
+        blockers: List[Issue] = []
+        seen: set[str] = set()
+        for change in changes:
+            if change.content is None:
+                continue
+            rel_path = self._rendered_path_for_change(change)
+            if not rel_path.endswith(".py") or rel_path in seen:
+                continue
+            seen.add(rel_path)
+            target = (root / rel_path).resolve()
+            if not self._is_within_root(root, target) or not target.is_file():
+                continue
+            try:
+                py_compile.compile(str(target), doraise=True)
+            except py_compile.PyCompileError as exc:
+                blockers.append(
+                    self._issue(
+                        "python_syntax_failed",
+                        "error",
+                        path=rel_path,
+                        details=str(exc),
+                    )
+                )
+            except Exception as exc:
+                blockers.append(
+                    self._issue(
+                        "python_syntax_failed",
+                        "error",
+                        path=rel_path,
+                        details=str(exc),
+                    )
+                )
+        return blockers
 
     def _normalize_diff_path(self, token: str) -> str:
         value = token.strip()
@@ -1068,6 +1272,7 @@ class PatchService:
         mapping = {
             "invalid_json": "Return strict JSON only; escape quotes and newlines in string fields.",
             "invalid_diff": "Ensure unified diff has valid --- / +++ / @@ markers.",
+            "parser_failed": "Regenerate the response using the selected executor response format only.",
             "unsupported_op": "Use one of: replace_range, insert_after, insert_before, create_file, delete_file.",
             "unsupported_edit_field": "Remove unknown edit keys and keep canonical nexus_edits_v2 fields only.",
             "missing_required_field": "Include all required fields for the chosen operation type.",

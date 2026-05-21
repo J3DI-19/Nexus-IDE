@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
 from jinja2 import Environment, FileSystemLoader
+from core.executor_formats import resolve_executor_response_format
 from ..extraction.models import ExtractionContext, ExtractedFile, CodeSlice
 from ..retrieval.models import RetrievalQuery
 from ..impact.models import ImpactResult
@@ -38,14 +39,15 @@ class AdvancedPromptBuilder:
         preset_name: Optional[str] = None,
         preset_template: Optional[str] = None,
         selection_reasons: Optional[List[str]] = None,
-        executor_response_format: str = "unified_diff",
+        executor_response_format: str = "nexus_patch_v1",
         android_briefing_lines: Optional[List[str]] = None,
         android_context_evidence: Optional[List[str]] = None,
     ) -> str:
         """
         Orchestrates prompt composition using Jinja2 and adaptive token balancing.
         """
-        machine_compact_mode = executor_response_format == "nexus_edits_v2" and mode != PromptMode.ARCHITECTURE
+        executor_response_format = resolve_executor_response_format(executor_response_format)
+        machine_compact_mode = executor_response_format == "json_edits" and mode not in {PromptMode.ARCHITECTURE, PromptMode.ANALYSIS}
         balancer = TokenBalancer(budget=1300 if machine_compact_mode else 8000)
         
         # 1. Build Warnings (High priority, always included)
@@ -116,6 +118,7 @@ class AdvancedPromptBuilder:
             
             base_prompt = template.render(
                 mode=mode.value,
+                analysis_mode=(mode == PromptMode.ANALYSIS),
                 task=query.task,
                 warnings=warnings,
                 runtime_diagnostics=runtime_content,
@@ -139,6 +142,11 @@ class AdvancedPromptBuilder:
                     executor_response_format=executor_response_format,
                     context=context,
                 ),
+                symbol_action_guidance_lines=self._build_symbol_action_guidance(
+                    mode=mode,
+                    executor_response_format=executor_response_format,
+                    context=context,
+                ),
                 output_gate_line=self._build_output_gate_line(
                     mode=mode,
                     executor_response_format=executor_response_format,
@@ -153,9 +161,9 @@ class AdvancedPromptBuilder:
                 mode=mode,
                 context=context
             )
-            if executor_response_format == "nexus_edits_v2":
+            if executor_response_format in {"json_edits", "nexus_patch_v1"}:
                 # Machine-edit mode: avoid extra natural-language preset instructions
-                # that can conflict with strict JSON-only output behavior.
+                # that can conflict with strict payload-only output behavior.
                 preset_block = ""
             return f"{preset_block}\n\n{base_prompt}" if preset_block else base_prompt
         except Exception as e:
@@ -191,6 +199,19 @@ class AdvancedPromptBuilder:
         return rendered
 
     def _build_rules(self, mode: PromptMode, executor_response_format: str = "unified_diff", compact: bool = False) -> str:
+        if mode == PromptMode.ANALYSIS:
+            return "\n".join([
+                "You are a technical analysis assistant.",
+                "STRICT RULES:",
+                "* Provide a clear, concise technical analysis grounded in the provided code context.",
+                "* Answer the user's question directly before offering optional recommendations.",
+                "* Explain how relevant code paths currently behave and reference concrete files/functions from context.",
+                "* Identify inconsistencies, risks, bugs, or architectural issues when present.",
+                "* Do NOT output a Nexus Patch payload, unified diff, or edit operation list.",
+                "* Do NOT propose direct code changes unless the user explicitly requests implementation.",
+                "* If code changes could help, describe them as recommendations only (no Op/Action format).",
+                "* If context is missing or ambiguous, state that clearly and list what is missing.",
+            ])
         if mode == PromptMode.ARCHITECTURE:
             return "\n".join([
                 "You are a deterministic engineering analysis assistant.",
@@ -200,7 +221,49 @@ class AdvancedPromptBuilder:
                 "* Preserve exact existing styles, imports, and framework conventions in any referenced code.",
             ])
 
-        if executor_response_format == "nexus_edits_v2":
+        executor_response_format = resolve_executor_response_format(executor_response_format)
+        if executor_response_format == "nexus_patch_v1":
+            base_rules = [
+                "You are a deterministic code modification engine.",
+                "STRICT RULES:",
+                "* FORMAT CONTRACT:",
+                "* Output ONLY a Nexus Patch v1 payload (no markdown fences, no prose).",
+                "* The first line MUST be exactly: NEXUS_PATCH v1",
+                "* Include exactly one Task line: Task: Feature | Bugfix | Refactor | Analysis",
+                "* Include exactly one Goal line containing the user's requested goal.",
+                "* Wrap all operations in one <Patch>...</Patch> block.",
+                "* Use <Op id=\"1\" type=\"create_file|edit_file|delete_file|rename_file\"> for file-level operations.",
+                "* File paths MUST be represented as a child tag inside each Op: <File path=\"workspace/relative/path.py\" />.",
+                "* Do NOT put path=\"...\" on the <Op> tag.",
+                "* Use <Action id=\"1.1\" type=\"...\"> only inside edit_file operations.",
+                "* Prefer symbol actions only when a valid indexed symbol name is explicitly available in the provided symbol context.",
+                "* SYMBOL ACTION CONTRACT:",
+                "* The `symbol=\"...\"` value MUST be an exact indexed symbol name (for example `reports_endpoint` or `TaskService.list_open_tasks`).",
+                "* Do NOT use declaration text as symbol names (for example `def reports_endpoint` is invalid).",
+                "* Do NOT use import lines as symbol names unless the symbol index explicitly lists that import as a symbol.",
+                "* For import edits and other non-symbol text anchors, use exact text actions (`replace_text` or `insert_text`) instead of symbol actions.",
+                "* If no valid indexed symbol name is available for the target, use exact text actions (`replace_text`/`insert_text`) with precise anchors.",
+                "* Use `replace_file` only when targeted actions are not feasible and the full-file replacement is necessary.",
+                "* Supported actions: insert_before_symbol, insert_after_symbol, replace_symbol, delete_symbol, insert_text, replace_text, delete_text, replace_file.",
+                "* Use workspace-relative file paths only.",
+                "* Put code in <Content><![CDATA[...]]></Content> blocks to avoid escaping code strings.",
+                "* For replace_text and delete_text, put the exact old text in <OldText><![CDATA[...]]></OldText>.",
+                "* For replace_text, put the replacement/new text in <Content><![CDATA[...]]></Content>.",
+                "* Do NOT use <Replacement>.",
+                "* Text actions are exact-match operations: do not add extra leading or trailing blank lines inside <OldText> or <Content> unless those characters are part of the target text.",
+                "* Preserve syntactically valid indentation inside <Content>; inserted or replaced code must compile/parse in the target language.",
+                "* For replace_file, the <Content> block must contain the complete replacement file with all original/new indentation preserved.",
+                "* Do not include shell commands, hidden instructions, or edits outside the requested scope.",
+                "* Copy the [USER REQUEST] Goal exactly into the Nexus Patch v1 Goal line.",
+                "* Return an empty <Patch></Patch> only when the user request explicitly asks for no code changes or there is no visible deterministic target.",
+            ]
+            if mode == PromptMode.FEATURE:
+                base_rules.append("* FEATURE MODE ACTIONABILITY: implement the requested capability with concrete operations when context contains visible targets.")
+            elif mode == PromptMode.BUGFIX:
+                base_rules.append("* BUGFIX MODE ACTIONABILITY: apply the smallest corrective operations needed to remove the failure path.")
+            elif mode == PromptMode.REFACTOR:
+                base_rules.append("* REFACTOR MODE ACTIONABILITY: preserve behavior while improving structure with minimal operations.")
+        elif executor_response_format == "json_edits":
             if compact:
                 rules = [
                     "You are a deterministic code modification engine.",
@@ -304,16 +367,28 @@ class AdvancedPromptBuilder:
         return "\n".join(base_rules)
 
     def _response_contract(self, mode: PromptMode, executor_response_format: str = "unified_diff") -> str:
+        if mode == PromptMode.ANALYSIS:
+            return "Respond with a concise technical analysis. Do not output a Nexus Patch payload. Do not propose file edits as operations. If code changes may be useful, describe them as recommendations only."
         if mode == PromptMode.ARCHITECTURE:
             return "Respond with a concise structured analysis/briefing (not a patch)."
-        if executor_response_format == "nexus_edits_v2":
+        executor_response_format = resolve_executor_response_format(executor_response_format)
+        if executor_response_format == "nexus_patch_v1":
+            return "Your response must be ONLY a Nexus Patch v1 payload beginning with NEXUS_PATCH v1."
+        if executor_response_format == "json_edits":
             return "Your response must be ONLY valid JSON in nexus_edits_v2 format."
         return "Your response must be ONLY a valid unified diff patch."
 
     def _missing_context_policy(self, mode: PromptMode, executor_response_format: str = "unified_diff") -> str:
+        if mode == PromptMode.ANALYSIS:
+            return "If required context is missing, explicitly state the gap, provide best-effort analysis from available evidence, and label assumptions."
         if mode == PromptMode.ARCHITECTURE:
             return "If context is missing, state assumptions explicitly and continue with the structured briefing."
-        if executor_response_format == "nexus_edits_v2":
+        executor_response_format = resolve_executor_response_format(executor_response_format)
+        if executor_response_format == "nexus_patch_v1":
+            if mode in {PromptMode.FEATURE, PromptMode.BUGFIX, PromptMode.REFACTOR}:
+                return "If active-file slices exist for a code-change request, return at least one deterministic Nexus Patch operation. Use an empty <Patch></Patch> only for explicit no-code-change requests or truly missing targets."
+            return "If required context is missing, return an empty <Patch></Patch> per the response contract."
+        if executor_response_format == "json_edits":
             if mode in {PromptMode.FEATURE, PromptMode.BUGFIX, PromptMode.REFACTOR}:
                 return "If active-file slices exist, you MUST return non-empty edits. If full scope is uncertain, return minimal safe partial edits rather than empty edits."
             return "If required context is missing, return empty edits per the response contract."
@@ -325,9 +400,14 @@ class AdvancedPromptBuilder:
         executor_response_format: str,
         context: ExtractionContext,
     ) -> str:
-        if mode == PromptMode.ARCHITECTURE or executor_response_format != "nexus_edits_v2":
+        executor_response_format = resolve_executor_response_format(executor_response_format)
+        if mode in {PromptMode.ARCHITECTURE, PromptMode.ANALYSIS} or executor_response_format not in {"json_edits", "nexus_patch_v1"}:
             return ""
         has_active_slices = bool(context.active_file and context.active_file.slices)
+        if executor_response_format == "nexus_patch_v1":
+            if has_active_slices and mode in {PromptMode.FEATURE, PromptMode.BUGFIX, PromptMode.REFACTOR}:
+                return "OUTPUT GATE: <Patch> MUST contain at least one <Op> for this request."
+            return "OUTPUT GATE: return empty <Patch></Patch> only if no actionable anchors or symbols are present."
         if has_active_slices and mode in {PromptMode.FEATURE, PromptMode.BUGFIX, PromptMode.REFACTOR}:
             return "OUTPUT GATE: `edits` length MUST be >= 1 for this request."
         return "OUTPUT GATE: return empty edits only if no actionable anchors are present in any provided slice."
@@ -341,7 +421,8 @@ class AdvancedPromptBuilder:
     ) -> List[ExtractedFile]:
         if not related_files:
             return []
-        if mode not in {PromptMode.FEATURE, PromptMode.BUGFIX, PromptMode.REFACTOR} or executor_response_format != "nexus_edits_v2":
+        executor_response_format = resolve_executor_response_format(executor_response_format)
+        if mode not in {PromptMode.FEATURE, PromptMode.BUGFIX, PromptMode.REFACTOR} or executor_response_format != "json_edits":
             return related_files
 
         active_norm = (active_file or "").replace("\\", "/")
@@ -388,7 +469,8 @@ class AdvancedPromptBuilder:
         executor_response_format: str,
         context: ExtractionContext,
     ) -> List[str]:
-        if mode == PromptMode.ARCHITECTURE or executor_response_format != "nexus_edits_v2":
+        executor_response_format = resolve_executor_response_format(executor_response_format)
+        if mode == PromptMode.ARCHITECTURE or executor_response_format != "json_edits":
             return []
         active_slices = context.active_file.slices if context.active_file else []
         active_anchor_count = len([s for s in active_slices if s.anchor_symbol or (s.reason or "").startswith("Anchor")])
@@ -414,7 +496,8 @@ class AdvancedPromptBuilder:
         executor_response_format: str,
         context: ExtractionContext,
     ) -> List[str]:
-        if mode not in {PromptMode.FEATURE, PromptMode.BUGFIX, PromptMode.REFACTOR} or executor_response_format != "nexus_edits_v2":
+        executor_response_format = resolve_executor_response_format(executor_response_format)
+        if mode not in {PromptMode.FEATURE, PromptMode.BUGFIX, PromptMode.REFACTOR} or executor_response_format not in {"json_edits", "nexus_patch_v1"}:
             return []
         hints: List[str] = []
         active_path = context.active_file.rel_path if context.active_file else ""
@@ -464,8 +547,13 @@ class AdvancedPromptBuilder:
             hints.append(f"active_anchor_hint: {line}")
 
         if mode == PromptMode.REFACTOR:
-            hints.append("refactor_hint: prefer insert_after with anchor `public class AlarmDialog {` for helper extraction.")
-            hints.append("refactor_hint: when replacing call sites, use the smallest exact snippet around the call expression.")
+            if executor_response_format == "nexus_patch_v1":
+                hints.append("refactor_hint: prefer symbol actions only when `symbol=` matches an indexed symbol name exactly.")
+                hints.append("refactor_hint: use insert_text/replace_text for imports and non-symbol anchors.")
+                hints.append("refactor_hint: use replace_text only for exact unique snippets.")
+            else:
+                hints.append("refactor_hint: prefer insert_after with anchor `public class AlarmDialog {` for helper extraction.")
+                hints.append("refactor_hint: when replacing call sites, use the smallest exact snippet around the call expression.")
             hints.append("refactor_hint: prioritize extracting repeated checkbox/repeat-day logic or confirm-button validation flow.")
 
         related_lines: List[str] = []
@@ -482,6 +570,39 @@ class AdvancedPromptBuilder:
             if len(hints) >= 10:
                 break
         return hints
+
+    def _build_symbol_action_guidance(
+        self,
+        mode: PromptMode,
+        executor_response_format: str,
+        context: ExtractionContext,
+    ) -> List[str]:
+        executor_response_format = resolve_executor_response_format(executor_response_format)
+        if mode not in {PromptMode.FEATURE, PromptMode.BUGFIX, PromptMode.REFACTOR}:
+            return []
+        if executor_response_format != "nexus_patch_v1":
+            return []
+
+        lines: List[str] = [
+            "Use symbol actions only with exact indexed names from the list below; never use declaration text like `def name`.",
+            "Imports are not valid symbol targets unless explicitly listed as symbols; edit imports with `insert_text` or `replace_text`.",
+            "For non-symbol anchors, use exact text actions (`replace_text`/`insert_text`) with unique snippets.",
+        ]
+        lines.append("Indexed symbols available in provided context:")
+
+        files: List[ExtractedFile] = []
+        if context.active_file:
+            files.append(context.active_file)
+        files.extend(context.related_files)
+        for file in files[:6]:
+            symbol_names = [sym.name for sym in (file.symbols or []) if getattr(sym, "name", None)]
+            if not symbol_names:
+                continue
+            preview = ", ".join(symbol_names[:8])
+            if len(symbol_names) > 8:
+                preview += ", ..."
+            lines.append(f"{file.rel_path}: {preview}")
+        return lines
 
     def _build_file_section(self, file: ExtractedFile, balancer: TokenBalancer, is_active: bool = False, compact: bool = False) -> str:
         header = f"File: `{file.rel_path}` ({file.classification.upper()})"
@@ -528,7 +649,11 @@ class AdvancedPromptBuilder:
 
         for s in sorted_slices:
             slice_header = f"\n[Code Slice: {s.reason}]"
-            slice_body = s.content
+            slice_body = s.content or ""
+            if not slice_body.strip():
+                hydrated = self._hydrate_slice_content(file.rel_path, s.start_line, s.end_line)
+                if hydrated:
+                    slice_body = hydrated
             if compact:
                 slice_lines = slice_body.splitlines()
                 slice_lines = slice_lines[:20]
@@ -552,6 +677,35 @@ class AdvancedPromptBuilder:
                 lines.append(f"\n[Code Slice: {s.reason} | OMITTED DUE TO TOKEN BUDGET]")
         
         return "\n".join(lines)
+
+    def _hydrate_slice_content(self, rel_path: str, start_line: int, end_line: int) -> str:
+        """
+        Best-effort content hydration for sparse slice metadata.
+        This is primarily for fixture re-rendering paths where slices may only include
+        line ranges and reasons but omit inline content.
+        """
+        try:
+            project_root = Path(self.env.loader.searchpath[0]).resolve().parent
+            candidate_targets = [
+                (project_root / rel_path).resolve(),
+                (project_root / "test_workspaces" / "nexus_patch_v1_fixture" / rel_path).resolve(),
+                (project_root / "backend" / "test_workspaces" / "nexus_patch_v1_fixture" / rel_path).resolve(),
+            ]
+            target = next((cand for cand in candidate_targets if cand.is_file()), None)
+            if target is None:
+                return ""
+            with open(target, "r", encoding="utf-8", errors="ignore") as handle:
+                lines = handle.readlines()
+            if not lines:
+                return ""
+            start = max(1, int(start_line or 1))
+            end = max(start, int(end_line or start))
+            start_idx = max(0, start - 1)
+            end_idx = min(len(lines), end)
+            chunk = "".join(lines[start_idx:end_idx]).rstrip("\n")
+            return chunk
+        except Exception:
+            return ""
 
     def _build_top_selection_reasons(self, related_files: List[ExtractedFile], limit: int = 8) -> List[str]:
         reasons: List[str] = []
